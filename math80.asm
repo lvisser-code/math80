@@ -1,42 +1,41 @@
-;*
-;IABSS  (HL) 16 bit signed integer absolute value.  Returns HL, CY = sign
-;IADD   (HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY = overflow
-;IADDS  (HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY = overflow
-;IASC   (@DE) 16 bit signed convert ASCII Decimal number to Integer.
-;ICMP   (HL, DE) 16 bit unsigned integer compare: HL - DE
-;IDIVS  (HL, DE) 16 bit signed division: HL / DE
-;INEGS  (HL) 16 bit signed integer negation: returns 2's complement of HL
-;ISUB   (HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
-;ISUBS  (HL, DE) 16 bit signed integer subtraction
+;******************************************************************************
+; Math routines for 8080 & 8085 microprocessors.  Integer & floating point
+; Author - Leonard Visser
+;
+;Subroutine call parameters shown in ( ).  @RP is a pointer.
+;  IABS   (HL) 16 bit signed integer absolute value.  Returns HL, CY = sign
+;  IADDU  (HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY
+;  IADD   (HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY
+;  IASC   (@DE) 16 bit signed convert ASCII Decimal number to Integer
+;  ICMP   (HL, DE) 16 bit unsigned integer compare: HL - DE
+;  IDIV   (HL, DE) 16 bit signed division: HL / DE
+;  IMUL   (HL, DE) 16 bit signed integer multiplication: HL * DE
+;  INEG   (HL) 16 bit signed integer negation: returns 2's complement of HL
+;  IPRINT (HL) Print 16 bit signed integer value as ASCII number
+;  IRND   (HL) 8 but integer pseudo-random number generator (1..255)
+;  ISUBU  (HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
+;  ISUB   (HL, DE) 16 bit signed integer subtraction
+;******************************************************************************
+;Manually relocate these labels
+MSG:    EQU 0           ;(@HL) Routine to display string, end with 0
+STR1:   EQU 8000        ;String buffer
+DSIGN:  DS 1            ;byte data used by IDIV
+ISIGN:  DS 1            ;byte data used by IASC
+RANDOM: DS 4            ;random number seed
 
-
-
-DSIGN:  DS 1            ;byte used by IDIVS
-ISIGN:  DS 1            ;byte used by IASC
 
 ;-----------------------------------------------------------------------------
 ;(HL) 16 bit signed integer absolute value.  Returns HL, CY = sign
-IABSS:  MOV A, H        ;Check the sign
+IABS:   MOV A, H        ;Check the sign
         ORA A
         RP              ;Done if positive, CY=0
-        CALL INEGS      ;Form 2's complement
+        CALL INEG       ;Form 2's complement
         STC             ;CY=1
-        RET
-
-
-;------------------------------------------------------------------------------
-;(HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY = overflow
-IADD:   MOV A, L
-        ADD E
-        MOV L, A
-        MOV A, H
-        ADC D
-        MOV H, A
         RET
 
 ;------------------------------------------------------------------------------
 ;(HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY = overflow
-IADDS:  MOV A, H        ;HL and DE both positive?
+IADD:   MOV A, H        ;HL and DE both positive?
         RLC
         JC IADDN
         MOV A, D
@@ -60,6 +59,16 @@ IADDN:  MOV A, H        ;HL and DE both negative?
 IADDM:  DAD D           ;HL and DE have mixed signs
         STC
         CMC
+        RET
+
+;------------------------------------------------------------------------------
+;(HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY = overflow
+IADDU:  MOV A, L
+        ADD E
+        MOV L, A
+        MOV A, H
+        ADC D
+        MOV H, A
         RET
 
 ;------------------------------------------------------------------------------
@@ -106,7 +115,7 @@ ASCIN2: SUI '0'         ;Convert ASCII digit to hex byte
         LDA ISIGN       ;Check sign
         ORA A
         JZ ASCIN4
-        CALL INEGS      ;Negative so form 2's complement
+        CALL INEG       ;Negative so form 2's complement
 ASCIN4: SUB A           ;Successful conversion, CY=0
 ASCIXT: POP B           ;Exit
         RET
@@ -124,13 +133,13 @@ ICMP:   MOV A, H
 ;------------------------------------------------------------------------------
 ;(HL, DE) 16 bit signed division: HL / DE
 ;Returns HL=result, DE=remainder, CY=1 if divide by 0 error
-IDIVS:  PUSH B
+IDIV:  PUSH B
         MVI B, 0        ;Make both args positive
-        CALL IABSS      ;  while saving their signs
+        CALL IABS       ;  while saving their signs
         JNC IDIVB
         INR B
 IDIVB:  XCHG
-        CALL IABSS
+        CALL IABS
         JNC IDIVC
         INR B
 IDIVC:  XCHG
@@ -214,7 +223,7 @@ IDIVE:  MOV H, B        ;Result in HL
 IDIVF:  LDA DSIGN       ;Get sign
         RAR             ;Is sign negative?
         JNC IDIVX
-        CALL INEGS      ;Quotient is negative
+        CALL INEG       ;Quotient is negative
         SUB A           ;CY=0
 IDIVX:  POP B
         RET
@@ -224,10 +233,46 @@ IDIV2S: ARHL
         JNZ IDIV2S
         RET
 
+;----------------------------------------------------------------------
+;(HL, DE) 16 bit signed integer multiplication: HL * DE
+;Returns HL, CY = ERR
+IMUL:  PUSH B
+        PUSH D
+        LXI B, 8        ;B = 0 (sign), C = 8 (loop counter)
+        CALL IABS       ;Make both args positive while
+        JNC IMUL1       ;  saving their signs in B
+        INR B
+IMUL1:  XCHG
+        CALL IABS
+        JNC IMUL2
+        INR B
+IMUL2:  CALL ICMP       ;Compare HL&DE
+        JC IMUL3        ;If HL is larger, then exchange
+        XCHG            ;DE = multiplicand, HL = multiplier
+IMUL3:  SUB A           ;H must be = 0, else overflow
+        CMP H
+        JNZ IMULX       ;Exit with CY=1 if overflow
+        MOV A, L        ;Let A = multipler
+        LXI H, 0        ;Init product = 0
+IMUL4:  DAD H           ;Rotate product left
+        RAL             ;Rotate multiplier left into CY
+        JNC IMUL5
+        DAD D           ;Add multiplicand to partial sum
+        JC IMULX        ;Exit with CY=1 if overflow
+IMUL5:  DCR C           ;Next
+        JNZ IMUL4
+        MOV A, B        ;If sign of 1 arg was negative
+        RAR
+        JNC IMULX
+        CALL INEG       ;  then product is negative
+        SUB A           ;CY=0
+IMULX:  POP D
+        POP B
+        RET
 
 ;----------------------------------------------------------------------
 ;(HL) 16 bit signed integer negation: returns 2's complement of HL
-INEGS:  PUSH PSW
+INEG:   PUSH PSW
         MOV A, H
         CMA
         MOV H, A
@@ -238,9 +283,105 @@ INEGS:  PUSH PSW
         POP PSW
         RET
 
+;------------------------------------------------------------------------------
+;(HL) Print 16 bit signed integer value as ASCII number between -32768 to 32767
+IPRINT: CALL IPSTR1     ;Convert integer value to ASCII string
+        LXI H, STR1+1
+        CALL MSG        ;Display the string
+        RET
+;Convert integer value to ASCII string. Save in STR1 with format:
+;  length|string|0.
+IPSTR1: PUSH B
+        PUSH D
+        LXI B, 0        ;B=SIGN, C=digit counter
+        MOV A, H        ;If integer is negative..
+        ANI 80H
+        JZ IPSTR2
+        MVI B, '-'      ;  then SIGN = '-'
+        CALL IABS       ;  HL = |HL|
+IPSTR2: LXI D, 10
+        CALL IDIV       ;(HL) ret HL / 10
+        PUSH D          ;E = digit, stack it
+        INR C           ;Inc digit counter
+        MOV A, L        ;Loop until HL = 0
+        ORA H
+        JNZ IPSTR2
+
+        LXI H, STR1     ;Write string to STR1
+        MOV M, C        ;Write length
+        MOV A, B        ;Write '-' if negative
+        ORA A
+        JZ IPSTR3
+        MOV A, C
+        INR A
+        MOV M, A
+        INX H
+        MVI M, '-'
+IPSTR3: INX H
+        POP D           ;Unstack digit
+        MOV A, E
+        ADI '0'         ;Convert to ASCII
+        MOV M, A        ;Write to STR1
+        DCR C
+        JNZ IPSTR3      ;loop till digit counter=0
+        INX H
+        SUB A
+        MOV M, A        ;Write terminating 0
+        POP D
+        POP B
+        RET
+
+;------------------------------------------------------------------------------
+;(HL) Integer pseudo-random number generator (1..255)
+;Call with HL = upper value, returns random in L
+IRND:   PUSH B
+        PUSH D
+        MOV A, H        ;HL cannot be 0
+        ADD L
+        JZ IRNDX
+        XCHG            ;Save upper in DE
+        LXI H, RANDOM+3 ;HL=ptr to seed data
+        MVI B, 8        ;Loop count
+        MVI A, 241Q
+IRNDL:  RLC
+        RLC
+        RLC
+        XRA M
+        RAL
+        RAL
+        DCR L
+        DCR L
+        DCR L
+        MOV A, M
+        RAL
+        MOV M, A
+        INR L
+        MOV A, M
+        RAL
+        MOV M, A
+        INR L
+        MOV A, M
+        RAL
+        MOV M, A
+        INR L
+        MOV A, M
+        RAL
+        MOV M, A
+        DCR B
+        JNZ IRNDL
+        MOV L, A        ;HL = result
+        MVI H, 0        ;DE = upper limit
+        CALL IDIV       ;DE = remainder of result/limit
+        INX D           ;+1
+        XCHG
+IRNDX:  POP D
+        POP B
+        RET
+
+
 ;----------------------------------------------------------------------
 ;(HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
-ISUB:   PUSH PSW
+ISUBU:  PUSH PSW
         MOV A, L
         SUB E
         MOV L, A
@@ -253,7 +394,7 @@ ISUB:   PUSH PSW
 ;----------------------------------------------------------------------
 ;(HL, DE) 16 bit signed integer subtraction
 ;Returns HL, CY = overflow
-ISUBS:  MOV A, H    ;Is HL negative and DE positive?
+ISUB:   MOV A, H    ;Is HL negative and DE positive?
         RLC
         JNC ISUBNC  ;  No, HL is positive
         MOV A, D
@@ -279,13 +420,6 @@ ISUBNC: MOV A, L    ;Subtract, CY=0
 ISUBX:  CMC         ;CY = 0
         RET
 
-
-
-
-
-
-;******************************************************************************
-
 ;------------------------------------------------------------------------------
 ;(@DE) Skip spaces in text pointed to by DE
 NOSPC:  LDAX D
@@ -294,7 +428,7 @@ NOSPC:  LDAX D
         INX D
         JMP NOSPC
 
-;----------------------------------------------------------------------
+;------------------------------------------------------------------------------
 ;(A) Test for char '0'-'9', returns CY=0 if yes
 IS09:   CPI '0'         ;If A is '0'-'9' CY=0
         RC              ;  else CY=1
