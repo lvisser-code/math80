@@ -3,9 +3,9 @@
 ; Author - Leonard Visser
 ;
 ;Subroutine call parameters shown in ( ).  @RP is a pointer.
-;  IABS   (HL) 16 bit signed integer absolute value.  Returns HL, CY = sign
-;  IADDU  (HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY
+;  IABS   (HL) 16 bit signed integer absolute value
 ;  IADD   (HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY
+;  IADDU  (HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY
 ;  IASC   (@DE) 16 bit signed convert ASCII Decimal number to Integer
 ;  ICMP   (HL, DE) 16 bit unsigned integer compare: HL - DE
 ;  IDIV   (HL, DE) 16 bit signed division: HL / DE
@@ -13,24 +13,26 @@
 ;  INEG   (HL) 16 bit signed integer negation: returns 2's complement of HL
 ;  IPRINT (HL) Print 16 bit signed integer value as ASCII number
 ;  IRND   (HL) 8 but integer pseudo-random number generator (1..255)
-;  ISUBU  (HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
 ;  ISUB   (HL, DE) 16 bit signed integer subtraction
+;  ISUBU  (HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
 ;******************************************************************************
+TEST:   CALL ISUB
+        HLT
+
 ;Manually relocate these labels
 MSG:    EQU 0           ;(@HL) Routine to display string, end with 0
 STR1:   EQU 8000        ;String buffer
 DSIGN:  DS 1            ;byte data used by IDIV
 ISIGN:  DS 1            ;byte data used by IASC
-RANDOM: DS 4            ;random number seed
+RANDOM: DS 4            ;random number seeds
 
 
 ;-----------------------------------------------------------------------------
-;(HL) 16 bit signed integer absolute value.  Returns HL, CY = sign
+;(HL) 16 bit signed integer absolute value.
 IABS:   MOV A, H        ;Check the sign
         ORA A
         RP              ;Done if positive, CY=0
         CALL INEG       ;Form 2's complement
-        STC             ;CY=1
         RET
 
 ;------------------------------------------------------------------------------
@@ -132,8 +134,8 @@ ICMP:   MOV A, H
 
 ;------------------------------------------------------------------------------
 ;(HL, DE) 16 bit signed division: HL / DE
-;Returns HL=result, DE=remainder, CY=1 if divide by 0 error
-IDIV:  PUSH B
+;Returns HL=result, DE=remainder, CY=1 if divide by 0 error.  Uses DSIGN
+IDIV:   PUSH B
         MVI B, 0        ;Make both args positive
         CALL IABS       ;  while saving their signs
         JNC IDIVB
@@ -148,10 +150,10 @@ IDIVC:  XCHG
         LXI B, 0        ;Init quotient = 0
         MOV A, D        ;Divide by 0?
         ADD E
-        JNZ IDIV0
+        JNZ IDIV1
         STC             ;  CY=1
         JMP IDIVX
-IDIV0:  CALL ICMP       ;Compare values
+IDIV1:  CALL ICMP       ;Compare values
         JZ IDIVL        ;Is divisor = dividend?
         JC IDIVD        ;Is divisor > dividend?
         MOV A, D        ;Is devisor > 255?
@@ -160,38 +162,42 @@ IDIV0:  CALL ICMP       ;Compare values
         MOV A, E
         CPI 1           ;Is divisor = 1?
         JNZ IDIV2
-IDIV1:  LXI D, 0
+        LXI D, 0        ;  yes, then accelerate
         JMP IDIVF
 IDIV2:  CPI 2           ;Is divisor = 2?
         JNZ IDIV10
-        LXI D, 0
-        ARHL
+        LXI D, 0        ;  yes, then accelerate
+        CALL ARHL       ;  shift HL right (HL/2)
         JNC IDIVF
         INR E
         JMP IDIVF
 IDIV10: CPI 10          ;Is divisor = 10?
         JNZ IDIVL
-        PUSH H          ;  save a copy of dividend
+        PUSH H          ;  yes, then accelerate
         MOV D, H
         MOV E, L
-        ARHL
+        CALL ARHL
         XCHG
-        ARHL
-        ARHL
+        CALL ARHL
+        CALL ARHL
         DAD D           ;  HL = dividend/2 + dividend/4
         MOV D, H
         MOV E, L
-        MVI A, 4
-        CALL IDIV2S
+        MVI C, 4
+IDIV3:  CALL ARHL
+        DCR C
+        JNZ IDIV3
         DAD D           ;  HL = HL + HL/16
         MOV D, H
         MOV E, L
-        MVI A, 8
-        CALL IDIV2S
+        MVI C, 8
+IDIV4:  CALL ARHL
+        DCR C
+        JNZ IDIV4
         DAD D           ;  HL = HL + HL/256
-        ARHL
-        ARHL
-        ARHL
+        CALL ARHL
+        CALL ARHL
+        CALL ARHL
         MOV B, H
         MOV C, L        ;  BC (result) = HL/8
         MOV D, H
@@ -213,6 +219,7 @@ IDIV10: CPI 10          ;Is divisor = 10?
         SUI 10
         MOV E, A
         JMP IDIVE
+
 IDIVL:  CALL ISUB       ;Subtract divisor from dividend
         INX B           ;Increment quotient
         CALL ICMP
@@ -227,15 +234,19 @@ IDIVF:  LDA DSIGN       ;Get sign
         SUB A           ;CY=0
 IDIVX:  POP B
         RET
-;(HL, A) Divide HL by 2 A times
-IDIV2S: ARHL        
-        DCR A
-        JNZ IDIV2S
+;(HL) Rotate HL right 1 bit position, CY = LSB
+ARHL:   SUB A           ;clear CY flag
+        MOV A, H        ;rotate H
+        RAR
+        MOV H, A
+        MOV A, L        ;rotate L
+        RAR
+        MOV L, A
         RET
 
 ;----------------------------------------------------------------------
 ;(HL, DE) 16 bit signed integer multiplication: HL * DE
-;Returns HL, CY = ERR
+;Returns HL, CY = 1 if overflow
 IMUL:  PUSH B
         PUSH D
         LXI B, 8        ;B = 0 (sign), C = 8 (loop counter)
@@ -378,22 +389,9 @@ IRNDX:  POP D
         POP B
         RET
 
-
 ;----------------------------------------------------------------------
-;(HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
-ISUBU:  PUSH PSW
-        MOV A, L
-        SUB E
-        MOV L, A
-        MOV A, H
-        SBB D
-        MOV H, A
-        POP PSW
-        RET
-
-;----------------------------------------------------------------------
-;(HL, DE) 16 bit signed integer subtraction
-;Returns HL, CY = overflow
+;(HL, DE) 16 bit signed integer subtraction (HL - DE)
+;Returns HL, CY=1 if overflow
 ISUB:   MOV A, H    ;Is HL negative and DE positive?
         RLC
         JNC ISUBNC  ;  No, HL is positive
@@ -418,6 +416,18 @@ ISUBNC: MOV A, L    ;Subtract, CY=0
         MOV H, A
         STC
 ISUBX:  CMC         ;CY = 0
+        RET
+
+;----------------------------------------------------------------------
+;(HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
+ISUBU:  PUSH PSW
+        MOV A, L
+        SUB E
+        MOV L, A
+        MOV A, H
+        SBB D
+        MOV H, A
+        POP PSW
         RET
 
 ;------------------------------------------------------------------------------
