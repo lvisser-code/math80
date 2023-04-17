@@ -1,5 +1,5 @@
 ;******************************************************************************
-; Math routines for 8080 & 8085 microprocessors.  Integer & floating point
+; Integer and floating point math routines for 8080 & 8085 microprocessors.
 ; Author - Leonard Visser
 ;
 ;Integer subroutine call parameters shown in ( ).  @RP is a pointer.
@@ -36,7 +36,6 @@
 ;  DSIN   (FPOP2) Floating sine, SIN(X), Returns FPRES
 ; *DSQRT  (H, L=FPOP2, B=FPRES, C=FPSCR) Floating square root, SQRT(X).  FPRES
 ;  DTAN   (FPOP2) Floating tangent, TAN(X).  Returns FPRES
-;  ERRF   Error handler
 ;  INPUT  (H, FPRES, FPSCR) Floating point 4-1/2 digit input from ASCII
 ;  INP    Helper to INPUT
 ;  LABS   (HL, C) Floating absolute value, |X|
@@ -50,19 +49,19 @@
 ; *LSUB   (H, L=FPOP1, B=FPOP2, C=FPSCR) Floating subtract, a-b. Returns FPOP1
 ;  OUTR   (A) Output an ASCII character
 ;******************************************************************************
-TEST:   CALL ISUB
-        HLT
 
 ;External routines and variables (not part of this package)
 DISPA:  EQU 0           ;(A) Routine to display char
 MSG:    EQU 0           ;(@HL) Routine to display string
-ERRLN:  EQU 0           ;(A) Routine to display error message
-ERRLN7: EQU 0           ; Routine to display overflow error message
+ERRLN3: EQU 0           ;Routine to display math error message
+ERRLN7: EQU 0           ;Routine to display overflow error message
 STR1:   EQU 8000        ;String buffer
+
 ;Variables used by integer math routines
 DSIGN:  DS 1            ;byte data used by IDIV
 ISIGN:  DS 1            ;byte data used by IASC
 RANDOM: DS 4            ;random number seeds
+
 ;Variables used by floating math routines must be in same memory page
 FPRES:  DS 4            ;floating result
 FPOP1:  DS 4            ;floating operand
@@ -79,6 +78,14 @@ FPCNT:  DS 1            ;byte counter
 EXPI:   DS 1            ;byte EXP(X) counter
 EXPS:   DS 1            ;byte EXP(X) sign flag
 LSIGN:  DS 1            ;byte sign
+
+
+
+;-----------------------------------------------------------------------------
+;-----------------------------------------------------------------------------
+;                           Integer Math Routines
+;-----------------------------------------------------------------------------
+;-----------------------------------------------------------------------------
 
 ;-----------------------------------------------------------------------------
 ;(HL) 16 bit signed integer absolute value.
@@ -2018,7 +2025,7 @@ INPUT:  MOV     B,L             ;SAVE ADDRESS WHERE DATA IS TO GO
 TSTEX:  CPI     25Q             ;TEST FOR E
         JZ      INEXP           ;YES - HANDLE EXP
         CPI     360Q            ;TEST FOR SPACE TERM (' '-'0')
-        JNZ     ERRF            ;NOT LEGAL TERM
+        JNZ     ERRLN3          ;NOT LEGAL TERM
         CALL    FLTSGN          ;FLOAT # AND SIGN IT
 SCALE:  CALL    GETEX           ;GET DECIMAL EXP
         ANI     177Q            ;GET GOOD BITS
@@ -2074,7 +2081,7 @@ INEXP:  CALL    FLTSGN          ;FLOAT AND SIGN NUMBER
         CALL    ZROIT           ;ZERO OUT NUM. FOR INPUTTING EXP
         CALL    GNUM            ;NOW INPUT EXPONENT
         CPI     360Q            ;TEST FOR SPACE TERM.
-        JNZ     ERRF            ;NOT LEGAL - TRY AGAIN
+        JNZ     ERRLN3          ;NOT LEGAL - TRY AGAIN
         MOV     L,C             ;GET EXP OUT OF MEM
         INR     L               ;/***TP
         INR     L               ;EXP LIMITED TO 5 BITS
@@ -2753,11 +2760,6 @@ DTAN:   LXI H, FPOP2    ;Copy X to FPOP3
         MVI C, FPRES
         CALL LDIV       ;FPRES = SINX(X)/COS(X)
         RET
-
-
-;**********************************************************************
-ERRF:   MVI A, 3                ;Display floating error message
-        JMP ERRLN
 
 
 ;**********************************************************************

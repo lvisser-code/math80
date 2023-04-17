@@ -1,0 +1,3108 @@
+ERR LINE  ADDR B1 B2 B3   *** ASM80 ASSEMBLER VER 1.0 ***
+       1                  ;******************************************************************************
+       2                  ; Integer and floating point math routines for 8080 & 8085 microprocessors.
+       3                  ; Author - Leonard Visser
+       4                  ;
+       5                  ;Integer subroutine call parameters shown in ( ).  @RP is a pointer.
+       6                  ;  IABS   (HL) 16 bit signed integer absolute value. Returns HL
+       7                  ;  IADD   (HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY
+       8                  ;  IADDU  (HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY
+       9                  ;  IASC   (@DE) 16 bit signed convert ASCII Decimal number to Integer
+      10                  ;  ICMP   (HL, DE) 16 bit unsigned integer compare: HL - DE.  Returns flags
+      11                  ;  IDIV   (HL, DE) 16 bit signed division: HL / DE.  Returns HL
+      12                  ;  IMUL   (HL, DE) 16 bit signed integer multiplication: HL * DE. Returns HL
+      13                  ;  INEG   (HL) 16 bit signed integer negation: returns 2's complement of HL
+      14                  ;  IPRINT (HL) Print 16 bit signed integer value as ASCII number
+      15                  ;  IRND   (HL) 8 but integer pseudo-random number generator (1..255)
+      16                  ;  ISUB   (HL, DE) 16 bit signed integer subtraction: HL - DE, Returns HL
+      17                  ;  ISUBU  (HL, DE) 16 bit unsigned integer subtraction: HL - DE, Returns HL
+      18                  ;
+      19                  ;Floating point subroutines built on original LLL code from "Floating Point
+      20                  ;Package for Intel 8008 and 8080 Microprocessors" *by Maples Oct 24 1975.
+      21                  ;Floating point dword (32 bit) format:
+      22                  ;  bbbbbbbb bbbbbbbb bbbbbbbb mexxxxxx
+      23                  ;  where b=24 bit mantissa, m=mantissa sign, e=exponent sign, x=6 bit exponent
+      24                  ;Numbers range from +/-6.46235E-27 to +/-4.61168E+18 with 7 digit accuracy.
+      25                  ;Examples: 0. = 00 00 00 40H
+      26                  ;          1. = 80 00 00 01H
+      27                  ;         10. = A0 00 00 04H
+      28                  ;Routines make use of a 17 byte scratch area FPSCR and operands FPOP1, FPOP2
+      29                  ;which must all be in the same page of memory.  On call, H = HIGH(FPSCR) and
+      30                  ;other pointers (L, B, C) will be a one byte offset, e.g. LOW(FPOP1).
+      31                  ; *CVRT   (H, L=FPRES, C=FPSCR) Floating number at FPRES output as ASCII
+      32                  ;  DCOS   (FPOP2) Floating cosine, COS(X).  Returns FPRES
+      33                  ;  DEXP   (FPOP2) Floating exponentiation, EXP(X).  Returns FPRES
+      34                  ;  DLOG   (FPOP2) Floating natural logarithm, LOG(X).  Returns FPRES
+      35                  ;  DPOW   (FPOP1, FPOP2) Floating power, POW(X, Y).  Returns FPRES
+      36                  ;  DSIN   (FPOP2) Floating sine, SIN(X), Returns FPRES
+      37                  ; *DSQRT  (H, L=FPOP2, B=FPRES, C=FPSCR) Floating square root, SQRT(X).  FPRES
+      38                  ;  DTAN   (FPOP2) Floating tangent, TAN(X).  Returns FPRES
+      39                  ;  INPUT  (H, FPRES, FPSCR) Floating point 4-1/2 digit input from ASCII
+      40                  ;  INP    Helper to INPUT
+      41                  ;  LABS   (HL, C) Floating absolute value, |X|
+      42                  ; *LADD   (H, L=FPOP1, B=FPOP2, C=FPSCR) Floating addition, X+Y. Returns FPOP1
+      43                  ;  LCMP   (HL, B) Floating compare, X-Y.  Returns C, Z flags
+      44                  ; *LDIV   (H, L=FPOP1, B=FPOP2, C=FPRES) Floating division, a/b. Returns FPRES
+      45                  ;  LFLOAT (HL, BC) Floating convert from signed integer to float
+      46                  ;  LINT   (HL) Floating convert to signed integer
+      47                  ; *LMUL   (H, L=FPOP1, B=FPOP2, C=FPRES) Floating multiply, a*b. Returns FPRES
+      48                  ;  LNEG   (HL, C) Floating negation, -(a)
+      49                  ; *LSUB   (H, L=FPOP1, B=FPOP2, C=FPSCR) Floating subtract, a-b. Returns FPOP1
+      50                  ;  OUTR   (A) Output an ASCII character
+      51                  ;******************************************************************************
+      52                  
+      53                  ;External routines and variables (not part of this package)
+      54                  DISPA:  EQU  0          ;(A) Routine to display char
+      55                  MSG:    EQU  0          ;(@HL) Routine to display string
+      56                  ERRLN3: EQU  0          ;Routine to display math error message
+      57                  ERRLN7: EQU  0          ;Routine to display overflow error message
+      58                  STR1:   EQU  8000       ;String buffer
+      59                  
+      60                  ;Variables used by integer math routines
+      61                  DSIGN:  DS   1          ;byte data used by IDIV
+      62                  ISIGN:  DS   1          ;byte data used by IASC
+      63                  RANDOM: DS   4          ;random number seeds
+      64                  
+      65                  ;Variables used by floating math routines must be in same memory page
+      66                  FPRES:  DS   4          ;floating result
+      67                  FPOP1:  DS   4          ;floating operand
+      68                  FPOP2:  DS   4          ;floating operand
+      69                  FPOP3:  DS   4          ;floating operand
+      70                  FPOP4:  DS   4          ;floating operand
+      71                  FPOP5:  DS   4          ;floating operand
+      72                  FPOP6:  DS   4          ;floating operand
+      73                  FPOP7:  DS   4          ;floating operand
+      74                  FPSCR:  DS   17         ;floating point scratch area
+      75                  FPPTR:  DS   2          ;word pointer
+      76                  FPFLG:  DS   1          ;byte flag
+      77                  FPCNT:  DS   1          ;byte counter
+      78                  EXPI:   DS   1          ;byte EXP(X) counter
+      79                  EXPS:   DS   1          ;byte EXP(X) sign flag
+      80                  LSIGN:  DS   1          ;byte sign
+      81                  
+      82                  
+      83                  
+      84                  ;-----------------------------------------------------------------------------
+      85                  ;-----------------------------------------------------------------------------
+      86                  ;                           Integer Math Routines
+      87                  ;-----------------------------------------------------------------------------
+      88                  ;-----------------------------------------------------------------------------
+      89                  
+      90                  ;-----------------------------------------------------------------------------
+      91                  ;(HL) 16 bit signed integer absolute value.
+      92  003E 7C         IABS:   MOV  A, H       ;Check the sign
+      93  003F B7                 ORA  A          
+      94  0040 F0                 RP              ;Done if positive, CY=0
+      95  0041 CD C7 01           CALL INEG       ;Form 2's complement
+      96  0044 C9                 RET             
+      97                  
+      98                  ;------------------------------------------------------------------------------
+      99                  ;(HL, DE) 16 bit signed integer addition: HL + DE. Returns HL, CY = overflow
+     100  0045 7C         IADD:   MOV  A, H       ;HL and DE both positive?
+     101  0046 07                 RLC             
+     102  0047 DA 53 00           JC   IADDN      
+     103  004A 7A                 MOV  A, D       
+     104  004B 07                 RLC             
+     105  004C DA 53 00           JC   IADDN      
+     106  004F 19                 DAD  D          ;  Yes, then add
+     107  0050 7C                 MOV  A, H       
+     108  0051 07                 RLC             
+     109  0052 C9                 RET             
+     110  0053 7C         IADDN:  MOV  A, H       ;HL and DE both negative?
+     111  0054 07                 RLC             
+     112  0055 D2 62 00           JNC  IADDM      
+     113  0058 7A                 MOV  A, D       
+     114  0059 07                 RLC             
+     115  005A D2 62 00           JNC  IADDM      
+     116  005D 19                 DAD  D          ;  Yes, then add
+     117  005E 7C                 MOV  A, H       
+     118  005F 07                 RLC             
+     119  0060 3F                 CMC             
+     120  0061 C9                 RET             
+     121  0062 19         IADDM:  DAD  D          ;HL and DE have mixed signs
+     122  0063 37                 STC             
+     123  0064 3F                 CMC             
+     124  0065 C9                 RET             
+     125                  
+     126                  ;------------------------------------------------------------------------------
+     127                  ;(HL, DE) 16 bit unsigned integer addition: HL + DE. Returns HL, CY = overflow
+     128  0066 7D         IADDU:  MOV  A, L       
+     129  0067 83                 ADD  E          
+     130  0068 6F                 MOV  L, A       
+     131  0069 7C                 MOV  A, H       
+     132  006A 8A                 ADC  D          
+     133  006B 67                 MOV  H, A       
+     134  006C C9                 RET             
+     135                  
+     136                  ;------------------------------------------------------------------------------
+     137                  ;(@DE) 16 bit signed convert ASCII Decimal number to Integer.
+     138                  ;Returns HL=value, CY=err
+     139  006D C5         IASC:   PUSH B          
+     140  006E 21 00 00           LXI  H, 0       ;Init result = 0
+     141  0071 97                 SUB  A          
+     142  0072 32 01 00           STA  ISIGN      ;Init sign = 0 (positive)
+     143  0075 CD 75 02           CALL NOSPC      ;Skip leading spaces, A=1st char
+     144  0078 FE 2B              CPI  '+'        ;Skip leading '+'
+     145  007A C2 82 00           JNZ  ASCIN0     
+     146  007D 13                 INX  D          
+     147  007E 1A                 LDAX D          
+     148  007F C3 8E 00           JMP  ASCIN1     
+     149  0082 FE 2D      ASCIN0: CPI  '-'        ;Negative?
+     150  0084 C2 8E 00           JNZ  ASCIN1     
+     151  0087 3E 01              MVI  A, 1       ;Sign = 1 (negative)
+     152  0089 32 01 00           STA  ISIGN      
+     153  008C 13                 INX  D          
+     154  008D 1A                 LDAX D          
+     155  008E CD 7D 02   ASCIN1: CALL IS09       ;Check for a digit
+     156  0091 DA C0 00           JC   ASCIXT     ;  if not exit with CY=1
+     157  0094 D6 30      ASCIN2: SUI  '0'        ;Convert ASCII digit to hex byte
+     158  0096 44                 MOV  B, H       ;Mult HL by 10
+     159  0097 4D                 MOV  C, L       
+     160  0098 29                 DAD  H          ;  x2
+     161  0099 29                 DAD  H          ;  x4
+     162  009A 29                 DAD  H          ;  x8
+     163  009B 09                 DAD  B          ;  x9
+     164  009C 09                 DAD  B          ;  x10
+     165  009D DA C0 00           JC   ASCIXT     ;Overflow (>FFFF)?
+     166  00A0 06 00              MVI  B, 0       ;Add byte in A to HL
+     167  00A2 4F                 MOV  C, A       
+     168  00A3 09                 DAD  B          
+     169  00A4 DA C0 00           JC   ASCIXT     ;Overflow (>FFFF)?
+     170  00A7 13                 INX  D          ;A = next Char
+     171  00A8 1A                 LDAX D          
+     172  00A9 CD 7D 02           CALL IS09       ;Another digit?
+     173  00AC D2 94 00           JNC  ASCIN2     ;  loop if yes
+     174  00AF 7C                 MOV  A, H       ;Result > 7FFFH (Overflow)?
+     175  00B0 E6 80              ANI  80H        
+     176  00B2 C2 C0 00           JNZ  ASCIXT     
+     177  00B5 3A 01 00           LDA  ISIGN      ;Check sign
+     178  00B8 B7                 ORA  A          
+     179  00B9 CA BF 00           JZ   ASCIN4     
+     180  00BC CD C7 01           CALL INEG       ;Negative so form 2's complement
+     181  00BF 97         ASCIN4: SUB  A          ;Successful conversion, CY=0
+     182  00C0 C1         ASCIXT: POP  B          ;Exit
+     183  00C1 C9                 RET             
+     184                  
+     185                  ;------------------------------------------------------------------------------
+     186                  ;(HL, DE) 16 bit unsigned integer compare: HL - DE
+     187                  ;Returns correct C & Z flags. HL, DE unchanged
+     188  00C2 7C         ICMP:   MOV  A, H       
+     189  00C3 BA                 CMP  D          
+     190  00C4 C0                 RNZ             
+     191  00C5 7D                 MOV  A, L       
+     192  00C6 BB                 CMP  E          
+     193  00C7 C9                 RET             
+     194                  
+     195                  ;------------------------------------------------------------------------------
+     196                  ;(HL, DE) 16 bit signed division: HL / DE
+     197                  ;Returns HL=result, DE=remainder, CY=1 if divide by 0 error.  Uses DSIGN
+     198  00C8 C5         IDIV:   PUSH B          
+     199  00C9 06 00              MVI  B, 0       ;Make both args positive
+     200  00CB CD 3E 00           CALL IABS       ;  while saving their signs
+     201  00CE D2 D2 00           JNC  IDIVB      
+     202  00D1 04                 INR  B          
+     203  00D2 EB         IDIVB:  XCHG            
+     204  00D3 CD 3E 00           CALL IABS       
+     205  00D6 D2 DA 00           JNC  IDIVC      
+     206  00D9 04                 INR  B          
+     207  00DA EB         IDIVC:  XCHG            
+     208  00DB 78                 MOV  A, B       
+     209  00DC 32 00 00           STA  DSIGN      ;Save sign
+     210  00DF 01 00 00           LXI  B, 0       ;Init quotient = 0
+     211  00E2 7A                 MOV  A, D       ;Divide by 0?
+     212  00E3 83                 ADD  E          
+     213  00E4 C2 EB 00           JNZ  IDIV1      
+     214  00E7 37                 STC             ;  CY=1
+     215  00E8 C3 80 01           JMP  IDIVX      
+     216  00EB CD C2 00   IDIV1:  CALL ICMP       ;Compare values
+     217  00EE CA 68 01           JZ   IDIVL      ;Is divisor = dividend?
+     218  00F1 DA 72 01           JC   IDIVD      ;Is divisor > dividend?
+     219  00F4 7A                 MOV  A, D       ;Is devisor > 255?
+     220  00F5 B7                 ORA  A          
+     221  00F6 C2 68 01           JNZ  IDIVL      
+     222  00F9 7B                 MOV  A, E       
+     223  00FA FE 01              CPI  1          ;Is divisor = 1?
+     224  00FC C2 05 01           JNZ  IDIV2      
+     225  00FF 11 00 00           LXI  D, 0       ;  yes, then accelerate
+     226  0102 C3 75 01           JMP  IDIVF      
+     227  0105 FE 02      IDIV2:  CPI  2          ;Is divisor = 2?
+     228  0107 C2 17 01           JNZ  IDIV10     
+     229  010A 11 00 00           LXI  D, 0       ;  yes, then accelerate
+     230  010D CD 82 01           CALL ARHL       ;  shift HL right (HL/2)
+     231  0110 D2 75 01           JNC  IDIVF      
+     232  0113 1C                 INR  E          
+     233  0114 C3 75 01           JMP  IDIVF      
+     234  0117 FE 0A      IDIV10: CPI  10         ;Is divisor = 10?
+     235  0119 C2 68 01           JNZ  IDIVL      
+     236  011C E5                 PUSH H          ;  yes, then accelerate
+     237  011D 54                 MOV  D, H       
+     238  011E 5D                 MOV  E, L       
+     239  011F CD 82 01           CALL ARHL       
+     240  0122 EB                 XCHG            
+     241  0123 CD 82 01           CALL ARHL       
+     242  0126 CD 82 01           CALL ARHL       
+     243  0129 19                 DAD  D          ;  HL = dividend/2 + dividend/4
+     244  012A 54                 MOV  D, H       
+     245  012B 5D                 MOV  E, L       
+     246  012C 0E 04              MVI  C, 4       
+     247  012E CD 82 01   IDIV3:  CALL ARHL       
+     248  0131 0D                 DCR  C          
+     249  0132 C2 2E 01           JNZ  IDIV3      
+     250  0135 19                 DAD  D          ;  HL = HL + HL/16
+     251  0136 54                 MOV  D, H       
+     252  0137 5D                 MOV  E, L       
+     253  0138 0E 08              MVI  C, 8       
+     254  013A CD 82 01   IDIV4:  CALL ARHL       
+     255  013D 0D                 DCR  C          
+     256  013E C2 3A 01           JNZ  IDIV4      
+     257  0141 19                 DAD  D          ;  HL = HL + HL/256
+     258  0142 CD 82 01           CALL ARHL       
+     259  0145 CD 82 01           CALL ARHL       
+     260  0148 CD 82 01           CALL ARHL       
+     261  014B 44                 MOV  B, H       
+     262  014C 4D                 MOV  C, L       ;  BC (result) = HL/8
+     263  014D 54                 MOV  D, H       
+     264  014E 5D                 MOV  E, L       
+     265  014F 29                 DAD  H          
+     266  0150 29                 DAD  H          
+     267  0151 19                 DAD  D          
+     268  0152 29                 DAD  H          
+     269  0153 54                 MOV  D, H       
+     270  0154 5D                 MOV  E, L       
+     271  0155 E1                 POP  H          
+     272  0156 CD 4D 02           CALL ISUB       
+     273  0159 EB                 XCHG            ;  DE (remainder) = (dividend-HL*4 + HL)*2
+     274  015A 3E 09              MVI  A, 9       ;Is remainder > 9?
+     275  015C BB                 CMP  E          
+     276  015D D2 73 01           JNC  IDIVE      
+     277  0160 03                 INX  B          ;  Yes, then inc B & remainder -= 10
+     278  0161 7B                 MOV  A, E       
+     279  0162 D6 0A              SUI  10         
+     280  0164 5F                 MOV  E, A       
+     281  0165 C3 73 01           JMP  IDIVE      
+     282                  
+     283  0168 CD 4D 02   IDIVL:  CALL ISUB       ;Subtract divisor from dividend
+     284  016B 03                 INX  B          ;Increment quotient
+     285  016C CD C2 00           CALL ICMP       
+     286  016F D2 68 01           JNC  IDIVL      
+     287  0172 EB         IDIVD:  XCHG            ;Remainder in DE
+     288  0173 60         IDIVE:  MOV  H, B       ;Result in HL
+     289  0174 69                 MOV  L, C       
+     290  0175 3A 00 00   IDIVF:  LDA  DSIGN      ;Get sign
+     291  0178 1F                 RAR             ;Is sign negative?
+     292  0179 D2 80 01           JNC  IDIVX      
+     293  017C CD C7 01           CALL INEG       ;Quotient is negative
+     294  017F 97                 SUB  A          ;CY=0
+     295  0180 C1         IDIVX:  POP  B          
+     296  0181 C9                 RET             
+     297                  ;(HL) Rotate HL right 1 bit position, CY = LSB
+     298  0182 97         ARHL:   SUB  A          ;clear CY flag
+     299  0183 7C                 MOV  A, H       ;rotate H
+     300  0184 1F                 RAR             
+     301  0185 67                 MOV  H, A       
+     302  0186 7D                 MOV  A, L       ;rotate L
+     303  0187 1F                 RAR             
+     304  0188 6F                 MOV  L, A       
+     305  0189 C9                 RET             
+     306                  
+     307                  ;----------------------------------------------------------------------
+     308                  ;(HL, DE) 16 bit signed integer multiplication: HL * DE
+     309                  ;Returns HL, CY = 1 if overflow
+     310  018A C5         IMUL:   PUSH B          
+     311  018B D5                 PUSH D          
+     312  018C 01 08 00           LXI  B, 8       ;B = 0 (sign), C = 8 (loop counter)
+     313  018F CD 3E 00           CALL IABS       ;Make both args positive while
+     314  0192 D2 96 01           JNC  IMUL1      ;  saving their signs in B
+     315  0195 04                 INR  B          
+     316  0196 EB         IMUL1:  XCHG            
+     317  0197 CD 3E 00           CALL IABS       
+     318  019A D2 9E 01           JNC  IMUL2      
+     319  019D 04                 INR  B          
+     320  019E CD C2 00   IMUL2:  CALL ICMP       ;Compare HL&DE
+     321  01A1 DA A5 01           JC   IMUL3      ;If HL is larger, then exchange
+     322  01A4 EB                 XCHG            ;DE = multiplicand, HL = multiplier
+     323  01A5 97         IMUL3:  SUB  A          ;H must be = 0, else overflow
+     324  01A6 BC                 CMP  H          
+     325  01A7 C2 C4 01           JNZ  IMULX      ;Exit with CY=1 if overflow
+     326  01AA 7D                 MOV  A, L       ;Let A = multipler
+     327  01AB 21 00 00           LXI  H, 0       ;Init product = 0
+     328  01AE 29         IMUL4:  DAD  H          ;Rotate product left
+     329  01AF 17                 RAL             ;Rotate multiplier left into CY
+     330  01B0 D2 B7 01           JNC  IMUL5      
+     331  01B3 19                 DAD  D          ;Add multiplicand to partial sum
+     332  01B4 DA C4 01           JC   IMULX      ;Exit with CY=1 if overflow
+     333  01B7 0D         IMUL5:  DCR  C          ;Next
+     334  01B8 C2 AE 01           JNZ  IMUL4      
+     335  01BB 78                 MOV  A, B       ;If sign of 1 arg was negative
+     336  01BC 1F                 RAR             
+     337  01BD D2 C4 01           JNC  IMULX      
+     338  01C0 CD C7 01           CALL INEG       ;  then product is negative
+     339  01C3 97                 SUB  A          ;CY=0
+     340  01C4 D1         IMULX:  POP  D          
+     341  01C5 C1                 POP  B          
+     342  01C6 C9                 RET             
+     343                  
+     344                  ;----------------------------------------------------------------------
+     345                  ;(HL) 16 bit signed integer negation: returns 2's complement of HL
+     346  01C7 F5         INEG:   PUSH PSW        
+     347  01C8 7C                 MOV  A, H       
+     348  01C9 2F                 CMA             
+     349  01CA 67                 MOV  H, A       
+     350  01CB 7D                 MOV  A, L       
+     351  01CC 2F                 CMA             
+     352  01CD 6F                 MOV  L, A       
+     353  01CE 23                 INX  H          
+     354  01CF F1                 POP  PSW        
+     355  01D0 C9                 RET             
+     356                  
+     357                  ;------------------------------------------------------------------------------
+     358                  ;(HL) Print 16 bit signed integer value as ASCII number between -32768 to 32767
+     359  01D1 CD DB 01   IPRINT: CALL IPSTR1     ;Convert integer value to ASCII string
+     360  01D4 21 41 1F           LXI  H, STR1+1  
+     361  01D7 CD 00 00           CALL MSG        ;Display the string
+     362  01DA C9                 RET             
+     363                  ;Convert integer value to ASCII string. Save in STR1 with format:
+     364                  ;  length|string|0.
+     365  01DB C5         IPSTR1: PUSH B          
+     366  01DC D5                 PUSH D          
+     367  01DD 01 00 00           LXI  B, 0       ;B=SIGN, C=digit counter
+     368  01E0 7C                 MOV  A, H       ;If integer is negative..
+     369  01E1 E6 80              ANI  80H        
+     370  01E3 CA EB 01           JZ   IPSTR2     
+     371  01E6 06 2D              MVI  B, '-'     ;  then SIGN = '-'
+     372  01E8 CD 3E 00           CALL IABS       ;  HL = |HL|
+     373  01EB 11 0A 00   IPSTR2: LXI  D, 10      
+     374  01EE CD C8 00           CALL IDIV       ;(HL) ret HL / 10
+     375  01F1 D5                 PUSH D          ;E = digit, stack it
+     376  01F2 0C                 INR  C          ;Inc digit counter
+     377  01F3 7D                 MOV  A, L       ;Loop until HL = 0
+     378  01F4 B4                 ORA  H          
+     379  01F5 C2 EB 01           JNZ  IPSTR2     
+     380                  
+     381  01F8 21 40 1F           LXI  H, STR1    ;Write string to STR1
+     382  01FB 71                 MOV  M, C       ;Write length
+     383  01FC 78                 MOV  A, B       ;Write '-' if negative
+     384  01FD B7                 ORA  A          
+     385  01FE CA 07 02           JZ   IPSTR3     
+     386  0201 79                 MOV  A, C       
+     387  0202 3C                 INR  A          
+     388  0203 77                 MOV  M, A       
+     389  0204 23                 INX  H          
+     390  0205 36 2D              MVI  M, '-'     
+     391  0207 23         IPSTR3: INX  H          
+     392  0208 D1                 POP  D          ;Unstack digit
+     393  0209 7B                 MOV  A, E       
+     394  020A C6 30              ADI  '0'        ;Convert to ASCII
+     395  020C 77                 MOV  M, A       ;Write to STR1
+     396  020D 0D                 DCR  C          
+     397  020E C2 07 02           JNZ  IPSTR3     ;loop till digit counter=0
+     398  0211 23                 INX  H          
+     399  0212 97                 SUB  A          
+     400  0213 77                 MOV  M, A       ;Write terminating 0
+     401  0214 D1                 POP  D          
+     402  0215 C1                 POP  B          
+     403  0216 C9                 RET             
+     404                  
+     405                  ;------------------------------------------------------------------------------
+     406                  ;(HL) Integer pseudo-random number generator (1..255)
+     407                  ;Call with HL = upper value, returns random in L
+     408  0217 C5         IRND:   PUSH B          
+     409  0218 D5                 PUSH D          
+     410  0219 7C                 MOV  A, H       ;HL cannot be 0
+     411  021A 85                 ADD  L          
+     412  021B CA 4A 02           JZ   IRNDX      
+     413  021E EB                 XCHG            ;Save upper in DE
+     414  021F 21 05 00           LXI  H, RANDOM+3;HL=ptr to seed data
+     415  0222 06 08              MVI  B, 8       ;Loop count
+     416  0224 3E A1              MVI  A, 241Q    
+     417  0226 07         IRNDL:  RLC             
+     418  0227 07                 RLC             
+     419  0228 07                 RLC             
+     420  0229 AE                 XRA  M          
+     421  022A 17                 RAL             
+     422  022B 17                 RAL             
+     423  022C 2D                 DCR  L          
+     424  022D 2D                 DCR  L          
+     425  022E 2D                 DCR  L          
+     426  022F 7E                 MOV  A, M       
+     427  0230 17                 RAL             
+     428  0231 77                 MOV  M, A       
+     429  0232 2C                 INR  L          
+     430  0233 7E                 MOV  A, M       
+     431  0234 17                 RAL             
+     432  0235 77                 MOV  M, A       
+     433  0236 2C                 INR  L          
+     434  0237 7E                 MOV  A, M       
+     435  0238 17                 RAL             
+     436  0239 77                 MOV  M, A       
+     437  023A 2C                 INR  L          
+     438  023B 7E                 MOV  A, M       
+     439  023C 17                 RAL             
+     440  023D 77                 MOV  M, A       
+     441  023E 05                 DCR  B          
+     442  023F C2 26 02           JNZ  IRNDL      
+     443  0242 6F                 MOV  L, A       ;HL = result
+     444  0243 26 00              MVI  H, 0       ;DE = upper limit
+     445  0245 CD C8 00           CALL IDIV       ;DE = remainder of result/limit
+     446  0248 13                 INX  D          ;+1
+     447  0249 EB                 XCHG            
+     448  024A D1         IRNDX:  POP  D          
+     449  024B C1                 POP  B          
+     450  024C C9                 RET             
+     451                  
+     452                  ;----------------------------------------------------------------------
+     453                  ;(HL, DE) 16 bit signed integer subtraction (HL - DE)
+     454                  ;Returns HL, CY=1 if overflow
+     455  024D 7C         ISUB:   MOV  A, H       ;Is HL negative and DE positive?
+     456  024E 07                 RLC             
+     457  024F D2 63 02           JNC  ISUBNC     ;  No, HL is positive
+     458  0252 7A                 MOV  A, D       
+     459  0253 07                 RLC             
+     460  0254 DA 63 02           JC   ISUBNC     ;  No, DE is negative
+     461  0257 7D                 MOV  A, L       ;Subtract and test sign of result
+     462  0258 93                 SUB  E          
+     463  0259 6F                 MOV  L, A       
+     464  025A 7C                 MOV  A, H       
+     465  025B 9A                 SBB  D          
+     466  025C 67                 MOV  H, A       
+     467  025D 07                 RLC             
+     468  025E DA 6A 02           JC   ISUBX      ;  jump if result negative
+     469  0261 3F                 CMC             
+     470  0262 C9                 RET             ;Result positive means overflow
+     471  0263 7D         ISUBNC: MOV  A, L       ;Subtract, CY=0
+     472  0264 93                 SUB  E          
+     473  0265 6F                 MOV  L, A       
+     474  0266 7C                 MOV  A, H       
+     475  0267 9A                 SBB  D          
+     476  0268 67                 MOV  H, A       
+     477  0269 37                 STC             
+     478  026A 3F         ISUBX:  CMC             ;CY = 0
+     479  026B C9                 RET             
+     480                  
+     481                  ;----------------------------------------------------------------------
+     482                  ;(HL, DE) 16 bit unsigned integer subtraction: HL - DE.  Returns HL
+     483  026C F5         ISUBU:  PUSH PSW        
+     484  026D 7D                 MOV  A, L       
+     485  026E 93                 SUB  E          
+     486  026F 6F                 MOV  L, A       
+     487  0270 7C                 MOV  A, H       
+     488  0271 9A                 SBB  D          
+     489  0272 67                 MOV  H, A       
+     490  0273 F1                 POP  PSW        
+     491  0274 C9                 RET             
+     492                  
+     493                  ;------------------------------------------------------------------------------
+     494                  ;(@DE) Skip spaces in text pointed to by DE
+     495  0275 1A         NOSPC:  LDAX D          
+     496  0276 FE 20              CPI  ' '        ;  (where DE->) and return first
+     497  0278 C0                 RNZ             ;  non-space char in A
+     498  0279 13                 INX  D          
+     499  027A C3 75 02           JMP  NOSPC      
+     500                  
+     501                  ;------------------------------------------------------------------------------
+     502                  ;(A) Test for char '0'-'9', returns CY=0 if yes
+     503  027D FE 30      IS09:   CPI  '0'        ;If A is '0'-'9' CY=0
+     504  027F D8                 RC              ;  else CY=1
+     505  0280 FE 3A              CPI  ':'        
+     506  0282 3F                 CMC             
+     507  0283 C9                 RET             
+     508                  
+     509                  
+     510                  
+     511                  
+     512                  
+     513                  
+     514                  ;**********************************************************************
+     515                  ;**********************************************************************
+     516                  ;                    Floating point math routines
+     517                  ;**********************************************************************
+     518                  ;**********************************************************************
+     519                  
+     520                  MINCH:  EQU  300Q       ;MINIMUM CHARACTERISTIC WITH SIGN EXTENDED
+     521                  MAXCH:  EQU  077Q       ;MAXIMUM CHARACTERISTIC WITH SIGN EXTENDED
+     522                  
+     523                  ;******************************************************
+     524                  ;       //// DIVIDE SUBROUTINE
+     525                  ;******************************************************
+     526  0284 CD ED 05   LDIV:   CALL CSIGN      ;COMPUTE SIGN OF RESULT
+     527  0287 CD 5E 04           CALL ZCHK       ;CHECK IF DIVIDEND = ZERO
+     528  028A C2 96 02           JNZ  DTST2      ;IF DIVIDEND .NE. 0 CHECK DIVISOR
+     529  028D CD 66 04           CALL BCHK       ;CHECK FOR ZERO/ZERO
+     530  0290 CA 2C 05           JZ   INDFC      ;ZERO/ZERO = INDEFINITE
+     531  0293 C3 33 05           JMP  WZERC      ;ZERO/NONZERO = ZERO
+     532  0296 CD 66 04   DTST2:  CALL BCHK       ;COME HERE IF DIVIDEND .NE. 0
+     533  0299 CA DF 05           JZ   OFLWC      ;NONZERO/ZERO = OVERFLOW
+     534                  ;IF WE GET HERE, THINGS LOOK OKAY
+     535  029C 5D                 MOV  E,L        ;SAVE BASE IN E
+     536  029D 69                 MOV  L,C        ;BASE 6 TO L
+     537  029E CD A1 04           CALL DCLR       ;CLEAR QUOTIENT MANTISSA SLOT
+     538  02A1 6B                 MOV  L,E        ;RESTORE BASE IN L
+     539  02A2 CD 94 05           CALL ENT1       ;DO FIRST CYCLE
+     540  02A5 69                 MOV  L,C        ;BASE 6 TO L
+     541  02A6 CD 6D 04           CALL DLST       ;MOVE QUOTIENT OVER ONE PLACE
+     542  02A9 16 17              MVI  D,23       ;NUMBER OF ITERATIONS TO D
+     543  02AB 6B         REP3:   MOV  L,E        
+     544  02AC CD 8E 05           CALL ENT2       
+     545  02AF 15                 DCR  D          ;DEC D
+     546  02B0 CA BF 02           JZ   GOON       
+     547  02B3 7D                 MOV  A,L        
+     548  02B4 69                 MOV  L,C        ;BASE 6 TO L
+     549  02B5 4F                 MOV  C,A        
+     550  02B6 CD 6D 04           CALL DLST       ;MOVE QUOTIENT MANT OVER
+     551  02B9 7D                 MOV  A,L        ;CPTR TO A
+     552  02BA 59                 MOV  E,C        ;LPTR TO E
+     553  02BB 4F                 MOV  C,A        ;CPTR TO C
+     554  02BC C3 AB 02           JMP  REP3       
+     555                  ;
+     556  02BF CD 65 05   GOON:   CALL AORS       ;CHECK IF RESULT IS NORMALIZED
+     557  02C2 FA D1 02           JM   CRIN       
+     558  02C5 7D                 MOV  A,L        ;LPTR TO A
+     559  02C6 69                 MOV  L,C        ;CPTR TO L
+     560  02C7 4F                 MOV  C,A        ;LPTR TO C
+     561  02C8 CD 6D 04           CALL DLST       ;SHIFT QUOTIENT LEFT
+     562  02CB 4D                 MOV  C,L        
+     563  02CC 6B                 MOV  L,E        
+     564  02CD CD BD 05           CALL LDCP       ;COMPUTE THE CHARACTERISTIC OF RESULT
+     565  02D0 C9                 RET             
+     566                  ;
+     567  02D1 CD D0 04   CRIN:   CALL CFCHE      ;GET A=CHAR(H,L), E=CHAR(H,B)
+     568  02D4 93                 SUB  E          ;NEW CHAR = CHAR(DIVIDEND) - CHAR(DVISIOR)
+     569  02D5 FE 7F              CPI  177Q       ;CHECK MAX POSITIVE NUMBER
+     570  02D7 CA DF 05           JZ   OFLWC      ;JUMP ON OVERFLOW
+     571  02DA C6 01              ADI  1          ;ADD 1 SINCE WE DID NOT LEFTSHIFT
+     572  02DC CD C8 05           CALL CCHK       ;CHECK AND STORE CHARACTERISTIC
+     573  02DF C9                 RET             ;RETURN
+     574                  
+     575                  
+     576                  ;******************************************************
+     577                  ;       //// ADDITION SUBROUTINE
+     578                  ;******************************************************
+     579  02E0 AF         LADD:   XRA  A          ;/***SET UP TO ADD
+     580  02E1 C3 E6 02           JMP  LADS       ;NOW DO IT
+     581                  
+     582                  
+     583                  ;******************************************************
+     584                  ;       //// SUBTRACTION SUBROUTINE
+     585                  ;******************************************************
+     586  02E4 3E 80      LSUB:   MVI  A,200Q     ;/****SET UP TO SUBTRACT
+     587                  ;   SUBROUTINE LADS
+     588                  ;
+     589                  ;       FLOATING POINT ADD OR SUB
+     590                  ;       A 128 ON ENTRY SUB
+     591                  ;       A 0 ON ENTRY ADD
+     592                  ;       F-S F,FIRST OPER DESTROYED
+     593                  ;       BASE 11 USED FOR SCRATCH
+     594  02E6 CD 73 05   LADS:   CALL ACPR       ;SAVE ENTRY PNT AT BASE 6
+     595  02E9 CD 66 04           CALL BCHK       ;CHECK ADDEND/SUBTRAHEND = ZERO
+     596  02EC C8                 RZ              ;IF SO, RESULT=ARG SO RETURN
+     597                  ;THIS WILL PREVENT UNDERFLOW INDICATION ON
+     598                  ;ZERO + OR - ZERO
+     599  02ED CD DF 04           CALL CCMP       
+     600  02F0 CA 20 03           JZ   EQ02       ;IF EQUAL, GO ON
+     601  02F3 57                 MOV  D,A        ;SAVE LPTR CHAR IN D
+     602  02F4 DA 03 03           JC   LLTB       
+     603  02F7 93                 SUB  E          ;L.GT.B IF HERE
+     604  02F8 E6 7F              ANI  127        
+     605  02FA 57                 MOV  D,A        ;DIFFERENCE TO D
+     606  02FB 5D                 MOV  E,L        ;SAVE BASE IN E
+     607  02FC 69                 MOV  L,C        ;C PTR TO L
+     608  02FD 2C                 INR  L          ;C PTR 1 TO L
+     609  02FE 73                 MOV  M,E        ;SAVE BASE IN C PTR\1
+     610  02FF 68                 MOV  L,B        ;B PTR TO L
+     611  0300 C3 08 03           JMP  NCHK       
+     612  0303 7B         LLTB:   MOV  A,E        ;L.LT.B IF HERE,BPTR TO A
+     613  0304 92                 SUB  D          ;SUBTRACT LPTR CHAR FROM BPTR CHAR
+     614  0305 E6 7F              ANI  127        
+     615  0307 57                 MOV  D,A        ;DIFFERENCE TO D
+     616  0308 3E 18      NCHK:   MVI  A,24       
+     617  030A BA                 CMP  D          
+     618  030B D2 10 03           JNC  SH10       
+     619  030E 16 18              MVI  D,24       
+     620  0310 B7         SH10:   ORA  A          
+     621  0311 CD 7C 04           CALL DRST       
+     622  0314 15                 DCR  D          
+     623  0315 C2 10 03           JNZ  SH10       
+     624  0318 7D         EQUL:   MOV  A,L        
+     625  0319 B8                 CMP  B          
+     626  031A C2 20 03           JNZ  EQ02       ;F.GT.S IF L.NE.B
+     627  031D 69                 MOV  L,C        ;C PTR TO L
+     628  031E 2C                 INR  L          ;C PTR\1 TO L
+     629  031F 6E                 MOV  L,M        ;RESTORE L
+     630  0320 CD 86 03   EQ02:   CALL LASD       ;CHECK WHAT TO
+     631  0323 CD 73 05           CALL ACPR       ;SAVE ANSWER
+     632  0326 FE 02              CPI  2          ;TEST FOR ZERO ANSWER
+     633  0328 C2 2E 03           JNZ  NOT0       
+     634  032B C3 11 05           JMP  WZER       ;WRITE FLOATING ZERO AND RETURN
+     635                  ;
+     636  032E 16 01      NOT0:   MVI  D,1        ;WILL TEST FOR SUB
+     637  0330 A2                 ANA  D          
+     638  0331 CA 5A 03           JZ   ADDZ       ;LSB 1 INPLIES SUB
+     639  0334 CD 6B 05           CALL TSTR       ;CHECK NORMAL/REVERSE
+     640  0337 CA 3D 03           JZ   SUBZ       ;IF NORMAL,GO SUBZ
+     641  033A 7D                 MOV  A,L        ;OTHERWISE REVERSE
+     642  033B 68                 MOV  L,B        ;ROLES
+     643  033C 47                 MOV  B,A        ;OF L AND B
+     644                  ;
+     645  033D CD AA 04   SUBZ:   CALL DSUB       ;SUBTRACT SMALLER FROM BIGGER
+     646  0340 CD 73 03           CALL MANT       ;SET UP SIGN OF RESULT
+     647  0343 CD 6B 05           CALL TSTR       ;SEE IF WE NEED TO INTERCHANGE
+     648                  ;BPTR AND LPTR
+     649  0346 CA 31 04           JZ   NORM       ;NO INTERCHANGE NECESSARY, SO NORMALIZE
+     650                  ;AND RETURN
+     651  0349 7D                 MOV  A,L        ;INTERCHANGE
+     652  034A 68                 MOV  L,B        ;L
+     653  034B 47                 MOV  B,A        ;AND B
+     654  034C 79                 MOV  A,C        ;CPTR  TO A
+     655  034D 48                 MOV  C,B        ;BPTR TO C
+     656  034E 5D                 MOV  E,L        ;LPTR TO E
+     657  034F 47                 MOV  B,A        ;CPTR TO B
+     658  0350 CD A8 05           CALL LXFR       ;MOVE BPTR> TO LPTR>
+     659  0353 78                 MOV  A,B        
+     660  0354 41                 MOV  B,C        
+     661  0355 4F                 MOV  C,A        
+     662  0356 6B                 MOV  L,E        
+     663  0357 C3 31 04           JMP  NORM       ;NORMALIZE RESULT AND RETURN
+     664                  ;
+     665                  ;   COPY THE LARGER CHARACTERISTIC TO THE RESULT
+     666                  ;
+     667  035A CD DF 04   ADDZ:   CALL CCMP       ;COMPARE THE CHARACTERISTICS
+     668  035D D2 63 03           JNC  ADD2       ;IF CHAR(H,L) .GE. CHAR(H,B) CONTINUE
+     669  0360 CD 11 06           CALL BCTL       ;IF CHAR(H,L) .LT. CHAR(H,B) THE COPY
+     670                  ;CHAR(H,B) TO CHAR(H,L)
+     671  0363 CD 73 03   ADD2:   CALL MANT       ;COMPUTE SIGN OF RESULT
+     672  0366 CD 8A 04           CALL DADD       ;ADD MANTISSAS
+     673  0369 D2 56 05           JNC  SCCFG      ;IF THERE IS NO OVFLW - DONE
+     674  036C CD 7C 04           CALL DRST       ;IF OVERFLOW SHIFT RIGHT
+     675  036F CD 3A 05           CALL INCR       ;AND INCREMENT CHARACTERISTIC
+     676  0372 C9                 RET             ;ALL DONE, SO RETURN
+     677                  ;
+     678                  ;   THIS ROUTINE STORES THE MANTISSA SIGN IN THE RESULT
+     679                  ;   THE SIGN HAS PREVIOUSLY BEEN COMPUTED BY LASD.
+     680                  ;
+     681  0373 5D         MANT:   MOV  E,L        ;SAVE L PTR
+     682  0374 69                 MOV  L,C        ;C PTR TO L
+     683  0375 7E                 MOV  A,M        ;LOAD INDEX WORD
+     684  0376 E6 80              ANI  128        ;SCARF SIGN
+     685  0378 6B                 MOV  L,E        ;RESTORE L PTR
+     686  0379 2C                 INR  L          ;L PTR 2
+     687  037A 2C                 INR  L          
+     688  037B 2C                 INR  L          ;TO L
+     689  037C 5F                 MOV  E,A        ;SAVE SIGN IN E
+     690  037D 7E                 MOV  A,M        
+     691  037E E6 7F              ANI  127        ;SCARF CHAR
+     692  0380 83                 ADD  E          ;ADD SIGN
+     693  0381 77                 MOV  M,A        ;STORE IT
+     694  0382 2D                 DCR  L          ;RESTORE
+     695  0383 2D                 DCR  L          
+     696  0384 2D                 DCR  L          ;L PTR
+     697  0385 C9                 RET             
+     698                  ;
+     699                  ;
+     700                  ;   SUBROUTINE LASD
+     701                  ;
+     702                  ;       UTILITY ROUTINE FOR LADS
+     703                  ;       CALCULATES TRUE OPER AND SGN
+     704                  ;       RETURNS ANSWER IN A
+     705  0386 CD FD 05   LASD:   CALL MSFH       ;FETCH MANT SIGNS, F IN A,D
+     706  0389 BB                 CMP  E          ;COMPARE SIGNS
+     707  038A DA B8 03           JC   ABCH       ;F\,S- MEANS GO TO A BRANCH
+     708  038D C2 C1 03           JNZ  BBCH       ;F- S\ MEANS GO TO B BRANCH
+     709  0390 83                 ADD  E          ;SAME SIGN IF HERE, ADD SIGNS
+     710  0391 DA A6 03           JC   BMIN       ;IF BOTH MINUS, WILL OVERFLOW
+     711  0394 CD 65 05           CALL AORS       ;BOTH POS IF HERE
+     712  0397 F2 CA 03           JP   L000       ;IF AN ADD, LOAD 0
+     713  039A CD 78 05   COM1:   CALL DCMP       ;COMPARE F WITH S
+     714  039D DA D8 03           JC   L131       ;S.GT.F,SO LOAD 131
+     715  03A0 C2 CC 03           JNZ  L001       ;F.GT.S,SO LOAD 1
+     716  03A3 3E 02      L002:   MVI  A,2        ;ERROR CONDITION, ZERO ANSWER
+     717  03A5 C9                 RET             
+     718  03A6 CD 65 05   BMIN:   CALL AORS       ;CHECK FOR ADD OR SUB
+     719  03A9 F2 D2 03           JP   L128       ;ADD, SO LOAD 128
+     720  03AC CD 78 05   COM2:   CALL DCMP       ;COMPARE F WITH S
+     721  03AF DA CF 03           JC   L003       ;S.GT.F,SO LOAD 3
+     722  03B2 C2 D5 03           JNZ  L129       ;FGT.S.SO LOAD 129
+     723  03B5 C3 A3 03           JMP  L002       ;ERROR
+     724  03B8 CD 65 05   ABCH:   CALL AORS       ;FT,S- SO TEST FOR A/S
+     725  03BB FA CA 03           JM   L000       ;SUBTRACT, SO LOAD 0
+     726  03BE C3 9A 03           JMP  COM1       ;ADD, SO GO TO DCMP
+     727  03C1 CD 65 05   BBCH:   CALL AORS       ;F-,S\,SO TEST FOR A/S
+     728  03C4 FA D2 03           JM   L128       ;SUB
+     729  03C7 C3 AC 03           JMP  COM2       ;ADD
+     730  03CA AF         L000:   XRA  A          
+     731  03CB C9                 RET             
+     732  03CC 3E 01      L001:   MVI  A,1        
+     733  03CE C9                 RET             
+     734  03CF 3E 03      L003:   MVI  A,3        
+     735  03D1 C9                 RET             
+     736  03D2 3E 80      L128:   MVI  A,128      
+     737  03D4 C9                 RET             
+     738  03D5 3E 81      L129:   MVI  A,129      
+     739  03D7 C9                 RET             
+     740  03D8 3E 83      L131:   MVI  A,131      
+     741  03DA C9                 RET             
+     742                  ;
+     743                  ;       SUBROUTINE LMCM
+     744                  ;       COMPARES THE MAGNITUDE OF
+     745                  ;       TWO FLOATING PNT NUMBERS
+     746                  ;       Z[1 IF [,C[1 IF F.LT.S.
+     747  03DB CD DF 04   LMCM:   CALL CCMP       ;CHECK CHARS
+     748  03DE C0                 RNZ             ;RETURN IF NOT EQUAL
+     749  03DF CD 78 05           CALL DCMP       ;IF EQUAL, CHECK MANTS
+     750  03E2 C9                 RET             
+     751                  
+     752                  
+     753                  ;***************************************************
+     754                  ;       //// MULTIPLY SUBROUTINE
+     755                  ;***************************************************
+     756                  ;
+     757                  ;   SUBROUTINE LMUL
+     758                  ;
+     759                  ;       FLOATING POINT MULTIPLY
+     760                  ;       L PTR X B PTR TO C PTR
+     761                  ;
+     762  03E3 CD ED 05   LMUL:   CALL CSIGN      ;COMPUTE SIGN OF RESULT AND STORE IT
+     763  03E6 CD 5E 04           CALL ZCHK       ;CHECK FIRST OPERAND FOR ZERO
+     764  03E9 CA 33 05           JZ   WZERC      ;ZERO * ANYTHING = ZERO
+     765  03EC CD 66 04           CALL BCHK       ;CHECK SECOND OPERAND FOR ZERO
+     766  03EF CA 33 05           JZ   WZERC      ;ANYTHING * ZERO = ZERO
+     767  03F2 5D                 MOV  E,L        ;SAVE L PTR
+     768  03F3 69                 MOV  L,C        ;C PTR TO L
+     769  03F4 CD A1 04           CALL DCLR       ;CLR PRODUCT MANT LOCS
+     770  03F7 6B                 MOV  L,E        ;L PTR TO L
+     771  03F8 16 18              MVI  D,24       ;LOAD NUMBER ITERATIONS
+     772  03FA CD 7C 04   KPGO:   CALL DRST       ;SHIFT L PTR RIGHT
+     773  03FD DA 28 04           JC   MADD       ;WILL ADD B PTR IF C[1
+     774  0400 7D                 MOV  A,L        ;INTERCHANGE
+     775  0401 69                 MOV  L,C        ;L AND
+     776  0402 4F                 MOV  C,A        ;C PTRS
+     777  0403 CD 7C 04   INTR:   CALL DRST       ;SHIFT PRODUCT OVER
+     778  0406 7D                 MOV  A,L        ;INTERCHANGE
+     779  0407 69                 MOV  L,C        ;L AND C PTRS_BACK TO
+     780  0408 4F                 MOV  C,A        ;ORIGINAL>
+     781  0409 15                 DCR  D          
+     782  040A C2 FA 03           JNZ  KPGO       ;MORE CYCLES IF Z[0
+     783  040D CD 65 05           CALL AORS       ;TEST IF RESULT IS NORMALIZED
+     784  0410 FA C4 05           JM   LMCP       ;IF NORMALIZED GO COMPUTE CHAR
+     785  0413 5D                 MOV  E,L        ;SAVE LPTR IN E
+     786  0414 69                 MOV  L,C        ;SET L=CPTR
+     787  0415 CD 6D 04           CALL DLST       ;LEFT SHIFT RESULT TO NORMALIZE
+     788  0418 6B                 MOV  L,E        ;RESTORE LPTR
+     789  0419 CD D0 04           CALL CFCHE      ;OTHERWISE SET A=CHAR(H,L), E=CHAR(H,B)
+     790  041C 83                 ADD  E          ;CHAR(RESULT) = CHAR(H,L) + CHAR(H,B)
+     791  041D FE 80              CPI  200Q       ;CHECK FOR SMALLEST NEGATIVE NUMBER
+     792  041F CA E6 05           JZ   UFLWC      ;IF SO THEN UNDERFLOW
+     793  0422 D6 01              SUI  1          ;SUBTRACT 1 TO COMPENSATE FOR NORMALIZE
+     794  0424 CD C8 05           CALL CCHK       ;CHECK CHARACTERISTIC AND STORE IT
+     795  0427 C9                 RET             ;RETURN
+     796                  ;
+     797  0428 7D         MADD:   MOV  A,L        ;INTERCHANGE
+     798  0429 69                 MOV  L,C        ;L AND
+     799  042A 4F                 MOV  C,A        ;C PTRS
+     800  042B CD 8A 04           CALL DADD       ;ACCUMULATE PRODUCT
+     801  042E C3 03 04           JMP  INTR       
+     802                  ;
+     803                  ;   SUBROUTINE NORM
+     804                  ;
+     805                  ;       THIS SUBROUTINE WILL NORMALIZE A FLOATING POINT
+     806                  ;       NUMBER, PRESERVING ITS ORIGINAL SIGN.
+     807                  ;       WE CHECK FOR UNDERFLOW AND SET THE CONDITION
+     808                  ;       FLAG APPROPRIATELY.  (SEE ERROR RETURNS).
+     809                  ;       THERE IS AN ENTRY POINT TO FLOAT A SIGNED INTEGER
+     810                  ;       (FLOAT) AND AN ENTRY POINT TO FLOAT AN UNSIGNED
+     811                  ;       INTEGER.
+     812                  ;
+     813                  ;   ENTRY POINTS:
+     814                  ;
+     815                  ;       NORM  - NORMALIZE FLOATING PT NUMBER AT (H,L)
+     816                  ;       FLOAT - FLOAT TRIPLE PRECISION INTEGER AT (H,L)
+     817                  ;               PRESERVING SIGN BIT IN (H,L)+3
+     818                  ;       DFXL  - FLOAT UNSIGNED (POSITIVE) TRIPLE PRECISION
+     819                  ;               AT (H,L)
+     820                  ;
+     821                  ;   REGISTERS ON EXIT:
+     822                  ;
+     823                  ;       A = CONDITION FLAG (SEE ERROR RETURNS)
+     824                  ;       D,E = GARBAGE
+     825                  ;       B,C,H,L = SAME AS ON ENTRY
+     826                  ;
+     827  0431 5D         NORM:   MOV  E,L        ;SAVE L IN E
+     828  0432 CD C5 04   NORM1:  CALL GCHAR      ;GET CHAR(H,L) IN A WITH SIGN EXTENDED
+     829  0435 57                 MOV  D,A        ;SAVE CHAR IN D
+     830  0436 6B         FXL1:   MOV  L,E        ;RESTORE L
+     831  0437 CD 5E 04   FXL2:   CALL ZMCHK      ;CHECK FOR ZERO MANTISSA
+     832  043A CA 11 05           JZ   WZER       ;IF ZERO MANTISSA THEN ZERO RESULT
+     833  043D 7E         REP6:   MOV  A,M        ;GET MOST SIGNIFICANT BYTE OF
+     834                  ;MANTISSA
+     835  043E B7                 ORA  A          ;SET FLAGS
+     836  043F FA 4F 04           JM   SCHAR      ;IF MOST SIGNFICANT BIT = 1 THEN
+     837                  ;NUMBER IS NORMALIZED AND WE GO TO
+     838                  ;STORE THE CHARACTERISTIC
+     839  0442 7A                 MOV  A,D        ;OTHERWISE CHECK FOR UNDERFLOW
+     840  0443 FE C0              CPI  MINCH      ;COMPARE WITH MINIMUM CHAR
+     841  0445 CA E7 04           JZ   WUND       ;IF EQUAL THEN UNDERFLOW
+     842  0448 CD 6D 04           CALL DLST       ;SHIFT MANTISSA LEFT
+     843  044B 15                 DCR  D          ;DECREMENT CHARACTERSTIC
+     844  044C C3 3D 04           JMP  REP6       ;LOOP AN TEST NEXT BIT
+     845  044F C3 47 05   SCHAR:  JMP  INCR3      ;STORE THE CHARACTERISTIC USING
+     846                  ;THE SAME CODE AS THE INCREMENT
+     847                  ;
+     848  0452 5D         DFXL:   MOV  E,L        ;ENTER HERE TO FLOAT UNSIGNED
+     849                  ;INTEGER
+     850                  ;FIRT SAVE L IN E
+     851  0453 2C                 INR  L          ;MAKE (H,L) POINT TO CHAR
+     852  0454 2C                 INR  L          ;MAKE (H,L) POINT TO CHAR
+     853  0455 2C                 INR  L          ;MAKE (H,L) POINT TO CHAR
+     854  0456 AF                 XRA  A          ;ZERO ACCUMULATOR
+     855  0457 77                 MOV  M,A        ;STORE A PLUS (+) SIGN
+     856  0458 6B                 MOV  L,E        ;RESTORE L
+     857  0459 16 18      FLOAT:  MVI  D,24       ;ENTER HERE TO FLOAT INTEGER
+     858                  ;PRESERVING ORIGINAL SIGN IN (H,L)+3
+     859                  ;SET UP CHARACTERISTIC
+     860  045B C3 37 04           JMP  FXL2       ;GO FLOAT THE NUMBER
+     861                  ;
+     862                  ;
+     863                  ;
+     864                  ;
+     865                  ;   SUBROUTINE ZCHK
+     866                  ;
+     867                  ;       THIS ROUTINE SETS THE ZERO FLAG IF IT DETECTS
+     868                  ;       A FLOATING ZERO AT (H,L).
+     869                  ;
+     870                  ;   SUBROUTINE ZMCHK
+     871                  ;
+     872                  ;       THIS ROUTINE SETS THE ZERO FLAG IF IT DETECTS A
+     873                  ;       ZERO MANTISSA AT (H,L)
+     874                  ;
+     875                  ZCHK:                   
+     876  045E 2C         ZMCHK:  INR  L          ;SET L TO POINT LAST BYTE OF MANTISSA
+     877  045F 2C                 INR  L          ;SET L TO POINT TO LAST BYTE OF MANTISSA
+     878  0460 7E                 MOV  A,M        ;LOAD LEAST SIGNIFICANT BYTE
+     879  0461 2D                 DCR  L          ;L POINTS TO MIDDLE BYTE
+     880  0462 B6                 ORA  M          ;OR WITH LEAST SIGNFICANT BYTE
+     881  0463 2D                 DCR  L          ;L POINTS TO MOST SIGNFICANT BYTE
+     882                  ;OF MANTISSA (ORIGINAL VALUE)
+     883  0464 B6                 ORA  M          ;OR IN MOST SIGNFICANT BYTE
+     884  0465 C9                 RET             ;RETURNS WITH ZERO FLAG SET APPROPRIATELY
+     885                  ;
+     886                  ;  SUBROUTINE BCHK
+     887                  ;
+     888                  ;       THIS ROUTINE CHECKS (H,B) FOR FLOATING PT ZERO
+     889                  ;
+     890  0466 5D         BCHK:   MOV  E,L        ;SAVE LPTR IN E
+     891  0467 68                 MOV  L,B        ;SET L=BPTR
+     892  0468 CD 5E 04           CALL ZCHK       ;CHECK FOR ZERO
+     893  046B 6B                 MOV  L,E        ;RESTORE L=LPTR
+     894  046C C9                 RET             ;RETURN
+     895                  ;
+     896                  ;
+     897                  ;   SUBROUTINE DLST
+     898                  ;
+     899                  ;       SHIFTS DBL WORD ONE PLACE LF
+     900  046D 2C         DLST:   INR  L          
+     901  046E 2C                 INR  L          ;/***TP
+     902  046F 7E                 MOV  A,M        ;LOAD IT
+     903  0470 B7                 ORA  A          ;KILL CARRY
+     904  0471 17                 RAL             ;SHIFT IT LEFT
+     905  0472 77                 MOV  M,A        ;STORE IT
+     906  0473 2D                 DCR  L          
+     907  0474 7E                 MOV  A,M        ;LOAD IT
+     908  0475 17                 RAL             ;SHIFT IT LEFT
+     909                  ;       IF CARRY SET BY FIRST SHIFT
+     910                  ;       IT WILL BE IN LSB OF SECOND
+     911  0476 77                 MOV  M,A        
+     912  0477 2D                 DCR  L          ;/***TP EXTENSION
+     913  0478 7E                 MOV  A,M        
+     914  0479 17                 RAL             
+     915  047A 77                 MOV  M,A        ;/***ALL DONE TP
+     916  047B C9                 RET             
+     917                  ;
+     918                  ;
+     919                  ;   SUBROUTINE DRST
+     920                  ;
+     921                  ;       SHIFTS DOUBLE WORD ONE PLACE
+     922                  ;       TO THE RIGHT
+     923                  ;           DOES NOT AFFECT D
+     924                  ;
+     925  047C 5D         DRST:   MOV  E,L        ;/***TP MODIFIED RIGHT SHIFT TP
+     926  047D 7E                 MOV  A,M        ;LOAD FIRST WORD
+     927  047E 1F                 RAR             ;ROTATE IT RIGHT
+     928  047F 77                 MOV  M,A        ;STORE IT
+     929  0480 2C                 INR  L          ;/*** TP
+     930  0481 7E                 MOV  A,M        ;LOAD SECOND WORD
+     931  0482 1F                 RAR             ;SHIFT IT RIGHT
+     932  0483 77                 MOV  M,A        ;STORE IT
+     933  0484 2C                 INR  L          ;/*** TP EXTENSION
+     934  0485 7E                 MOV  A,M        
+     935  0486 1F                 RAR             
+     936  0487 77                 MOV  M,A        
+     937  0488 6B                 MOV  L,E        ;/***TP - ALL DONE TP
+     938  0489 C9                 RET             
+     939                  ;
+     940                  ;
+     941                  ;   SUBROUTINE DADD
+     942                  ;
+     943                  ;       ADDS TWO DOUBLE PRECISION
+     944                  ;       WORDS, C=1 IF THERE IS OVRFLW
+     945                  ;
+     946  048A 5D         DADD:   MOV  E,L        ;SAVE BASE IN E
+     947  048B 68                 MOV  L,B        ;BASE \3 TO L
+     948  048C 2C                 INR  L          ;BASE \4 TO L
+     949  048D 2C                 INR  L          ;/***TP
+     950  048E 7E                 MOV  A,M        ;LOAD S MANTB
+     951  048F 6B                 MOV  L,E        ;BASE TO L
+     952  0490 2C                 INR  L          ;BASE \1 TO L
+     953  0491 2C                 INR  L          ;/***TP
+     954  0492 86                 ADD  M          ;ADD TWO MANTB]S
+     955  0493 77                 MOV  M,A        ;STORE ANSWER
+     956  0494 68                 MOV  L,B        ;/***TP EXTENSION
+     957  0495 2C                 INR  L          
+     958  0496 7E                 MOV  A,M        
+     959  0497 6B                 MOV  L,E        
+     960  0498 2C                 INR  L          
+     961  0499 8E                 ADC  M          
+     962  049A 77                 MOV  M,A        ;/***TP - ALL DONE
+     963  049B 68                 MOV  L,B        ;BASE \3 TO L
+     964  049C 7E                 MOV  A,M        ;MANTA OF S TO A
+     965  049D 6B                 MOV  L,E        ;BASE TO L
+     966  049E 8E                 ADC  M          ;ADD WITH CARRY
+     967  049F 77                 MOV  M,A        ;STORE ANSWER
+     968  04A0 C9                 RET             
+     969                  ;
+     970                  ;
+     971                  ;   SUBROUTINE DCLR
+     972                  ;
+     973                  ;       CLEARS TWO SUCCESSIVE
+     974                  ;       LOCATIONS OF MEMORY
+     975                  
+     976  04A1 AF         DCLR:   XRA  A          
+     977  04A2 77                 MOV  M,A        
+     978  04A3 2C                 INR  L          
+     979  04A4 77                 MOV  M,A        
+     980  04A5 2C                 INR  L          ;/***TP EXTENSION
+     981  04A6 77                 MOV  M,A        ;/***TP ZERO 3
+     982  04A7 2D                 DCR  L          ;/***TP - ALL DONE
+     983  04A8 2D                 DCR  L          
+     984  04A9 C9                 RET             
+     985                  ;
+     986                  ;
+     987                  ;       /*****ALL NEW DSUB - SHORTER***
+     988                  ;
+     989                  ;   SUBROUTINE DSUB
+     990                  ;
+     991                  ;       DOUBLE PRECISION SUBTRACT
+     992                  ;
+     993  04AA 5D         DSUB:   MOV  E,L        ;SAVE BASE IN E
+     994  04AB 2C                 INR  L          ;/***TP EXTENSION
+     995  04AC 2C                 INR  L          ;/START WITH LOWS
+     996  04AD 7E                 MOV  A,M        ;/GET ARG
+     997  04AE 68                 MOV  L,B        ;/NOW SET UP TO SUB
+     998  04AF 2C                 INR  L          
+     999  04B0 2C                 INR  L          
+    1000  04B1 96                 SUB  M          ;/NOW DO IT
+    1001  04B2 6B                 MOV  L,E        ;/NOW MUST PUT IT BACK
+    1002  04B3 2C                 INR  L          
+    1003  04B4 2C                 INR  L          
+    1004  04B5 77                 MOV  M,A        ;/PUT BACK
+    1005  04B6 2D                 DCR  L          ;/***TP - ALL DONE
+    1006  04B7 7E                 MOV  A,M        ;/GET LOW OF LOP
+    1007  04B8 68                 MOV  L,B        ;/SET TO BOP
+    1008  04B9 2C                 INR  L          ;/SET TO BOP LOW
+    1009  04BA 9E                 SBB  M          ;/GET DIFF. OF LOWS
+    1010  04BB 6B                 MOV  L,E        ;/SAVE IN LOP LOW
+    1011  04BC 2C                 INR  L          ;/TO LOP LOW
+    1012  04BD 77                 MOV  M,A        ;/INTO RAM
+    1013  04BE 2D                 DCR  L          ;/BACK UP TO LOP HIGH
+    1014  04BF 7E                 MOV  A,M        ;/GET LOP HIGH
+    1015  04C0 68                 MOV  L,B        ;/SET TO BOP HIGH
+    1016  04C1 9E                 SBB  M          ;/SUB. WITH CARRY
+    1017  04C2 6B                 MOV  L,E        ;/SAVE IN LOP HIGH
+    1018  04C3 77                 MOV  M,A        ;/INTO RAM
+    1019  04C4 C9                 RET             ;/ALL DONE - MUCH SHORTER
+    1020                  ;
+    1021                  ;   SUBROUTINE GCHAR
+    1022                  ;
+    1023                  ;       THIS SUBROUTINE RETURNS THE CHARACTERISTIC OF
+    1024                  ;       THE FLOATING POINT NUMBER POINTED TO BY (H,L)
+    1025                  ;       IN THE A REGISTER WITH ITS SIGN EXTENDED INTO THE
+    1026                  ;       LEFTMOST BIT.
+    1027                  ;
+    1028                  ;   REGISTERS ON EXIT:
+    1029                  ;
+    1030                  ;       A = CHARACTERISTIC OF (H,L) WITH SIGN EXTENDED
+    1031                  ;       L = (ORIGINAL L) + 3
+    1032                  ;       B,C,D,E,H = SAME AS ON ENTRY
+    1033                  ;
+    1034  04C5 2C         GCHAR:  INR  L          ;MAKE (H,L) POINT TO CHAR
+    1035  04C6 2C                 INR  L          ;MAKE (H,L) POINT TO CHAR
+    1036  04C7 2C                 INR  L          ;MAKE (H,L) POINT TO CHAR
+    1037  04C8 7E                 MOV  A,M        ;SET A=CHAR + MANTISSA SIGN
+    1038  04C9 E6 7F              ANI  177Q       ;GET RID OF MANTISSA SIGN BIT
+    1039  04CB C6 40              ADI  100Q       ;PROPAGATE CHAR SIGN INTO LEFTMOST BIT
+    1040  04CD EE 40              XRI  100Q       ;RESTORE ORIGINAL CHAR SIGN BIT
+    1041  04CF C9                 RET             ;RETURN WITH (H,L) POINTING TO THE
+    1042                  ;CHAR = ORIGINAL (H,L)+3
+    1043                  ;SOMEONE ELSE WILL CLEAN UP
+    1044                  ;
+    1045                  ;
+    1046                  ;   SUBROUTINE CFCHE
+    1047                  ;
+    1048                  ;       THIS SUBROUTINE RETURNS THE CHARACTERISTICS OF THE
+    1049                  ;       FLOATING POINT NUMBERS POINTED TO BY (H,L) AND
+    1050                  ;       (H,B) IN THE A AND E REGISTERS RESPECTIVELY,
+    1051                  ;       WITH THEIR SIGNS EXTENDED INTO THE LEFTMOST BIT.
+    1052                  ;
+    1053                  ;   REGISTERS ON EXIT:
+    1054                  ;
+    1055                  ;       A = CHARACTERISTIC OF (H,L) WITH SIGN EXTENDED
+    1056                  ;       E = CHARACTERISTIC OF (H,B) WITH SIGN EXTENDED
+    1057                  ;       B,C,H,L = SAME AS ON ENTRY
+    1058                  ;       D = A
+    1059                  ;
+    1060  04D0 5D         CFCHE:  MOV  E,L        ;SAVE LPTR IN E
+    1061  04D1 68                 MOV  L,B        ;SET L = BPTR
+    1062  04D2 CD C5 04           CALL GCHAR      ;GET CHAR(H,B) WITH SIGN EXTENDED IN A
+    1063  04D5 6B                 MOV  L,E        ;RESTORE L = LPTR
+    1064  04D6 5F                 MOV  E,A        ;SET E=CHAR(H,B) WITH SIGN EXTENDED
+    1065  04D7 CD C5 04           CALL GCHAR      ;SET A=CHAR(H,L) WITH SIGN EXTENDED
+    1066  04DA 2D                 DCR  L          ;RESTORE L = LPTR
+    1067  04DB 2D                 DCR  L          ;RESTORE L = LPTR
+    1068  04DC 2D                 DCR  L          ;RESTORE L = LPTR
+    1069  04DD 57                 MOV  D,A        ;SET D=A=CHAR(H,L) WITH SIGN EXTENDED
+    1070  04DE C9                 RET             
+    1071                  ;
+    1072                  ;
+    1073                  ;   SUBROUTINE CCMP
+    1074                  ;
+    1075                  ;       THIS SUBROUTINE COMPARES THE CHARACTERISTICS OF
+    1076                  ;       FLOATING POINT NUMBERS POINTED TO BY (H,L) AND (H,B).
+    1077                  ;       THE ZERO FLIP-FLOP IS SET IF CHAR(H,L) EQUALS
+    1078                  ;       CHAR(H,B).  IF CHAR(H,L) IS LESS THAN CHAR(H,B) THEN
+    1079                  ;       THE CARRY BIT WILL BE SET.
+    1080                  ;
+    1081                  ;   REGISTERS ON EXIT:
+    1082                  ;
+    1083                  ;       A = CHARACTERISTIC OF (H,L) WITH SIGN EXTENDED
+    1084                  ;       E = CHARACTERISTIC OF (H,B) WITH SIGN EXTENDED
+    1085                  ;       D = A
+    1086                  ;       B,C,H,L = SAME AS ON ENTRY
+    1087                  ;
+    1088  04DF CD D0 04   CCMP:   CALL CFCHE      ;FETCH CHARACTERTISTICS WITH SIGN EXTENDED
+    1089                  ;INTO A (CHAR(H,L)) AND E (CHAR(H,B)) REGISTERS
+    1090  04E2 57                 MOV  D,A        ;SAVE CHAR (H,L)
+    1091  04E3 93                 SUB  E          ;SUBTRACT E (CHAR(H,B))
+    1092  04E4 17                 RAL             ;ROTATE SIGN BIT INTO CARRY BIT
+    1093  04E5 7A                 MOV  A,D        ;RESTORE A=CHAR(H,L)
+    1094  04E6 C9                 RET             ;RETURN
+    1095                  ;
+    1096                  ;   ERROR RETURNS
+    1097                  ;
+    1098                  ;       THE FOLLOWING CODE IS USED TO RETURN VARIOUS
+    1099                  ;       ERROR CONDITIONS.  IN EACH CASE A FLOATING POINT
+    1100                  ;       NUMBER IS STORED IN  THE 4 WORDS POINTED TO BY (H,L)
+    1101                  ;       AND A FLAG IS STORED IN THE ACCUMULATOR.
+    1102                  ;
+    1103                  ;       CONDITION   FLAG   RESULT (+)        RESULT (-)
+    1104                  ;
+    1105                  ;       UNDERFLOW    377   000 000 000 100   000 000 000 300
+    1106                  ;       OVERFLOW     177   377 377 377 077   377 377 377 277
+    1107                  ;       INDEFINITE   077   377 377 377 077   377 377 377 277
+    1108                  ;       NORMAL       000   XXX XXX XXX XXX   XXX XXX XXX XXX
+    1109                  ;       NORMAL ZERO  000   000 000 000 100   (ALWAYS RETURNS +0)
+    1110                  ;
+    1111                  ;   ENTRY POINTS:
+    1112                  ;
+    1113                  ;       WUND - WRITE UNDERFLOW
+    1114                  ;       WOVR - WRITE OVERFLOW
+    1115                  ;       WIND - WRITE INDEFINITE
+    1116                  ;       WZER - WRITE NORMAL ZERO
+    1117                  ;
+    1118                  ;###S
+    1119                  ;WFLT     MACRO   VMANT,VCHAR,VFLAG,LABEL  ;WRITE FLOATING NUMBER
+    1120                  ;
+    1121                  ;         MVI     D,VCHAR     ;LOAD CHARACTERISTIC INTO D REGISTER
+    1122                  ;         CALL    WCHAR       ;WRITE CHARACTERISTIC
+    1123                  ;LABEL::  MVI     A,VMANT     ;LOAD MANTISSA VALUE
+    1124                  ;                             ;WE ASSUME HERE THAT ALL BYTES OF MANTISSA
+    1125                  ;                             ;ARE THE SAME
+    1126                  ;         CALL    WMANT       ;WRITE THE MANTISSA
+    1127                  ;         MVI     A,VFLAG     ;SET ACCUMULATOR TO FLAG
+    1128                  ;         ORA     A           ;SET FLAGS PROPERLY
+    1129                  ;         RET                 ;RETURN (WMANT RESTORED (H,L))
+    1130                  ;         ENDM
+    1131                  ;
+    1132                  ;WUND:   WFLT    0,100Q,377Q,UFLW1  ;WRITE UNDERFLOW
+    1133  04E7 16 40      WUND:   MVI  D,100Q     ;LOAD CHARACTERISTIC INTO D REGISTER
+    1134  04E9 CD 23 05           CALL WCHAR      ;WRITE CHARACTERISTIC
+    1135  04EC 3E 00      UFLW1:  MVI  A,0        ;LOAD MANTISSA VALUE
+    1136                  ;WE ASSUME HERE THAT ALL BYTES OF MANTISSA
+    1137                  ;ARE THE SAME
+    1138  04EE CD 1C 05           CALL WMANT      ;WRITE THE MANTISSA
+    1139  04F1 3E FF              MVI  A,377Q     ;SET ACCUMULATOR TO FLAG
+    1140  04F3 B7                 ORA  A          ;SET FLAGS PROPERLY
+    1141  04F4 C9                 RET             ;RETURN (WMANT RESTORED (H,L))
+    1142                  ;WOVR:   WFLT    377Q,77Q,177Q,OFLW1  ;WRITE OVERFLOW
+    1143  04F5 16 3F      WOVR:   MVI  D,77Q      ;LOAD CHARACTERISTIC INTO D REGISTER
+    1144  04F7 CD 23 05           CALL WCHAR      ;WRITE CHARACTERISTIC
+    1145  04FA 3E FF      OFLW1:  MVI  A,377Q     ;LOAD MANTISSA VALUE
+    1146                  ;WE ASSUME HERE THAT ALL BYTES OF MANTISSA
+    1147                  ;ARE THE SAME
+    1148  04FC CD 1C 05           CALL WMANT      ;WRITE THE MANTISSA
+    1149  04FF 3E 7F              MVI  A,177Q     ;SET ACCUMULATOR TO FLAG
+    1150  0501 B7                 ORA  A          ;SET FLAGS PROPERLY
+    1151  0502 C9                 RET             ;RETURN (WMANT RESTORED (H,L))
+    1152                  ;WIND:   WFLT    377Q,77Q,77Q,INDF1  ;WRITE INDEFINITE
+    1153  0503 16 3F      WIND:   MVI  D,77Q      ;LOAD CHARACTERISTIC INTO D REGISTER
+    1154  0505 CD 23 05           CALL WCHAR      ;WRITE CHARACTERISTIC
+    1155  0508 3E FF      INDF1:  MVI  A,377Q     ;LOAD MANTISSA VALUE
+    1156                  ;WE ASSUME HERE THAT ALL BYTES OF MANTISSA
+    1157                  ;ARE THE SAME
+    1158  050A CD 1C 05           CALL WMANT      ;WRITE THE MANTISSA
+    1159  050D 3E 3F              MVI  A,77Q      ;SET ACCUMULATOR TO FLAG
+    1160  050F B7                 ORA  A          ;SET FLAGS PROPERLY
+    1161  0510 C9                 RET             ;RETURN (WMANT RESTORED (H,L))
+    1162                  ;###E
+    1163                  ;
+    1164  0511 2C         WZER:   INR  L          ;WRITE NORMAL ZERO
+    1165  0512 2C                 INR  L          ;
+    1166  0513 2C                 INR  L          ;
+    1167  0514 36 40              MVI  M,100Q     ;STORE CHARACTERISTIC FOR ZERO
+    1168  0516 AF                 XRA  A          ;ZERO ACCUMULATOR
+    1169  0517 CD 1C 05           CALL WMANT      ;STORE ZERO MANTISSA
+    1170  051A B7                 ORA  A          ;SET FLAGS PROPERLY
+    1171  051B C9                 RET             ;RETURN
+    1172                  ;
+    1173                  ; ROUTINE TO WRITE MANTISSA FOR ERROR RETURNS
+    1174                  ;
+    1175  051C 2D         WMANT:  DCR  L          ;POINT LEAST SIGNIFICANT BYTE
+    1176                  ;OF MANTISSA
+    1177  051D 77                 MOV  M,A        ;STORE LSBYTE OF MANTISSA
+    1178  051E 2D                 DCR  L          ;POINT TO NEXT LEAST SIGNIFICANT BYTE
+    1179                  ;OF MANTISSA
+    1180  051F 77                 MOV  M,A        ;STORE NLSBYTE OF MANTISSA
+    1181  0520 2D                 DCR  L          ;POINT TO MOST SIGNIFICANT BYTE
+    1182                  ;OF MANTISSA
+    1183  0521 77                 MOV  M,A        ;STORE MSBYTE OF MANTISSA
+    1184  0522 C9                 RET             ;RETURN (H,L) POINTS TO BEGINNING OF
+    1185                  ;FLOATING POINT RESULT
+    1186                  ;
+    1187                  ; ROUTINE TO WRITE CHARACTERTIC FOR ERROR RETURNS
+    1188                  ; NOTE:  WE PRESERVE ORIGINAL MANTISSA SIGN
+    1189                  ; ON ENTRY D CONTAINS NEW CHARACTERTISTIC TO BE STORED.
+    1190                  ;
+    1191  0523 2C         WCHAR:  INR  L          ;SET (H,L) TO POINT TO CHARACTERISTIC
+    1192  0524 2C                 INR  L          ;PART OF ABOVE
+    1193  0525 2C                 INR  L          ;PART OF ABOVE
+    1194  0526 7E                 MOV  A,M        ;LOAD CHARACTERISTIC A
+    1195                  ;AND MANTISSA SIGN
+    1196  0527 E6 80              ANI  200Q       ;JUST KEEP MANTISSA SIGN
+    1197  0529 B2                 ORA  D          ;OR IN NEW CHARACTERISTIC
+    1198  052A 77                 MOV  M,A        ;STORE IT BACK
+    1199  052B C9                 RET             ;RETURN WITH (H,L) POINT TO CHARACTERISTIC
+    1200                  ;OF RESULT
+    1201                  ;SOMEONE ELSE WILL FIX UP (H,L)
+    1202                  ;
+    1203                  ;   SUBROUTINE INDFC
+    1204                  ;
+    1205                  ;       THIS ROUTINE WRITES A FLOATING INDEFINITE, SETS
+    1206                  ;       THIS WRITES WRITES A FLOATING POINT INDEFINITE
+    1207                  ;       AT (H,C), SETS THE CONDITION FLAG AND RETURNS
+    1208                  ;
+    1209                  ;
+    1210  052C 5D         INDFC:  MOV  E,L        ;SAVE LPTR IN E
+    1211  052D 69                 MOV  L,C        ;SET L=CPTR SO (H,L)-ADDR OF RESULT
+    1212  052E CD 03 05           CALL WIND       ;WRITE INDEFINITE
+    1213  0531 6B                 MOV  L,E        ;RESTORE L=LPTR
+    1214  0532 C9                 RET             ;RETURN
+    1215                  ;
+    1216                  ;
+    1217                  ;   SUBROUTINE WZERC
+    1218                  ;
+    1219                  ;       THIS ROUTINE WRITES A NORMAL FLAOTING POINT ZERO
+    1220                  ;       AT (H,C), SETS THE CONDITION FLAG AND RETURNS
+    1221                  ;
+    1222  0533 5D         WZERC:  MOV  E,L        ;SAVE LPTR IN E
+    1223  0534 69                 MOV  L,C        ;SETL=CPTR SO (H,L)=ADDR OF RESULT
+    1224  0535 CD 11 05           CALL WZER       ;WRITE NORMAL ZERO
+    1225  0538 6B                 MOV  L,E        ;RESTORE L=LPTR
+    1226  0539 C9                 RET             ;RETURN
+    1227                  ;
+    1228                  ;   SUBROUTINE INCR
+    1229                  ;
+    1230                  ;       THIS SUBROUTINE INCREMENTS THE CHARACTERISTIC
+    1231                  ;       OF THE FLOATING POINT NUMBER POINTED TO BY (H,L).
+    1232                  ;       WE TEST FOR OVERFLOW AND SET APPROPRIATE FLAG.
+    1233                  ;       (SEE ERRROR RETURNS).
+    1234                  ;
+    1235                  ;   REGISTERS ON EXIT:
+    1236                  ;
+    1237                  ;        A = CONDITION FLAG (SEE ERROR RETURNS)
+    1238                  ;        D = CLOBBERED
+    1239                  ;        B,C,H,L = SAME AS ON ENTRY
+    1240                  ;
+    1241  053A CD C5 04   INCR:   CALL GCHAR      ;GET CHAR WITH SIGN EXTENDED
+    1242  053D FE 3F              CPI  MAXCH      ;COMPARE WITH MAX CHAR PERMITTED
+    1243  053F CA FA 04           JZ   OFLW1      ;INCREMENT WOULD CAUSE OVERFLOW
+    1244  0542 57                 MOV  D,A        ;SAVE IT IN D
+    1245  0543 14                 INR  D          ;INCREMENT IT
+    1246  0544 C3 4A 05           JMP  INCR2      ;JUMP AROUND ALTERNATE ENTRY POINT
+    1247  0547 2C         INCR3:  INR  L          ;COME HERE TO STORE CHARACTERISTIC
+    1248  0548 2C                 INR  L          ;POINT (H,L) TO CHAR
+    1249  0549 2C                 INR  L          ;POINT (H,L) TO CHAR
+    1250  054A 3E 7F      INCR2:  MVI  A,177Q     
+    1251  054C A2                 ANA  D          ;KILL SIGN BIT
+    1252  054D 57                 MOV  D,A        ;BACK TO D
+    1253  054E 7E                 MOV  A,M        ;NOW SIGN IT
+    1254  054F E6 80              ANI  200Q       ;GET MANTISSA SIGN
+    1255  0551 B2                 ORA  D          ;PUT TOGETHER
+    1256  0552 77                 MOV  M,A        ;STORE IT BACK
+    1257  0553 2D                 DCR  L          ;NOW BACK TO BASE
+    1258  0554 2D                 DCR  L          ;/***TP
+    1259  0555 2D                 DCR  L          
+    1260  0556 AF         SCCFG:  XRA  A          ;SET SUCCESS FLAG
+    1261  0557 C9                 RET             
+    1262                  ;
+    1263                  ;   SUBROUTINE DECR
+    1264                  ;
+    1265                  ;       THIS SUBROUTINE DECREMENTS THE CHARACTERISTIC
+    1266                  ;       OF THE FLOATING POINT NUMBER POINTED TO BY (H,L).
+    1267                  ;       WE TEST FOR UNDERFLOW AND SET APPROPRIATE FLAG.
+    1268                  ;       (SEE ERRROR RETURNS).
+    1269                  ;
+    1270                  ;   REGISTERS ON EXIT:
+    1271                  ;
+    1272                  ;        A = CONDITION FLAG (SEE ERROR RETURNS)
+    1273                  ;        D = CLOBBERED
+    1274                  ;        B,C,H,L = SAME AS ON ENTRY
+    1275                  ;
+    1276  0558 CD C5 04   DECR:   CALL GCHAR      ;GET CHAR WITH SIGN EXTENDED
+    1277  055B FE C0              CPI  MINCH      ;COMPARE WITH MIN CHAR PERMITTED
+    1278  055D CA EC 04           JZ   UFLW1      ;DECREMENT WOULD CAUSE UNDERFLOW
+    1279  0560 57                 MOV  D,A        ;SAVE CHARACTERSTIC IN D
+    1280  0561 15                 DCR  D          ;DECREMENT CHARACTERISTIC
+    1281  0562 C3 4A 05           JMP  INCR2      ;GO STORE IT BACK
+    1282                  ;
+    1283                  ;   SUBROUTINE AORS
+    1284                  ;
+    1285                  ;       RETURN S=1 IF BASE 6
+    1286                  ;       HAS A 1 IN MSB
+    1287                  ;
+    1288  0565 5D         AORS:   MOV  E,L        ;SAVE BASE
+    1289  0566 69                 MOV  L,C        ;BASE 6 TO L
+    1290  0567 7E                 MOV  A,M        ;LOAD IT
+    1291  0568 B7                 ORA  A          ;SET FLAGS
+    1292  0569 6B                 MOV  L,E        ;RESTORE BASE
+    1293  056A C9                 RET             
+    1294                  ;
+    1295                  ;
+    1296                  ;   SUBROUTINE TSTR
+    1297                  ;
+    1298                  ;       CHECKS C PTR TO SEE IF
+    1299                  ;       NLSB !
+    1300                  ;       RETURNS Z=1 IF NOT
+    1301                  ;       DESTROYS E,D
+    1302                  ;
+    1303  056B 5D         TSTR:   MOV  E,L        ;SAVE BASE
+    1304  056C 69                 MOV  L,C        ;C PTR TO L
+    1305  056D 16 02              MVI  D,2        ;MASK TO D
+    1306  056F 7E                 MOV  A,M        ;LOAD VALUE
+    1307  0570 6B                 MOV  L,E        ;RESTORE BASE
+    1308  0571 A2                 ANA  D          ;AND VALUE WITH MASK
+    1309  0572 C9                 RET             
+    1310                  ;
+    1311                  ;
+    1312                  ;   SUBROUTINE ACPR
+    1313                  ;
+    1314                  ;       STORES A IN LOCATION OF CPTR
+    1315                  ;       LPTR IN E
+    1316                  ;
+    1317  0573 5D         ACPR:   MOV  E,L        ;SAVE LPTR
+    1318  0574 69                 MOV  L,C        ;CPTR TO L
+    1319  0575 77                 MOV  M,A        ;STORE A
+    1320  0576 6B                 MOV  L,E        ;RESTORE BASE
+    1321  0577 C9                 RET             
+    1322                  ;
+    1323                  ;
+    1324                  ;   SUBROUTINE DCMP
+    1325                  ;
+    1326                  ;       COMPARES TWO DOUBLE LENGTH
+    1327                  ;       WORDS
+    1328                  ;
+    1329  0578 7E         DCMP:   MOV  A,M        ;NUM MANTA TO A
+    1330  0579 5D                 MOV  E,L        ;SAVE BASE IN E
+    1331  057A 68                 MOV  L,B        ;BASE 3 TO L
+    1332  057B BE                 CMP  M          ;COMPARE WITH DEN MANTA
+    1333  057C 6B                 MOV  L,E        ;RETURN BASE TO L
+    1334  057D C0                 RNZ             ;RETURN IF NOT THE SAME
+    1335  057E 2C                 INR  L          ;L TO NUM MANTB
+    1336  057F 7E                 MOV  A,M        ;LOAD IT
+    1337  0580 68                 MOV  L,B        ;DEN MANTB ADD TO L
+    1338  0581 2C                 INR  L          ;BASE 4 TO L
+    1339  0582 BE                 CMP  M          
+    1340  0583 6B                 MOV  L,E        
+    1341  0584 C0                 RNZ             ;/***TP EXTENSION
+    1342  0585 2C                 INR  L          ;NOW CHECK BYTE 3
+    1343  0586 2C                 INR  L          
+    1344  0587 7E                 MOV  A,M        ;GET FOR COMPARE
+    1345  0588 68                 MOV  L,B        
+    1346  0589 2C                 INR  L          
+    1347  058A 2C                 INR  L          ;BYTE 3 NOW
+    1348  058B BE                 CMP  M          ;COMPARE
+    1349  058C 6B                 MOV  L,E        ;/***TP - ALL DONE
+    1350  058D C9                 RET             
+    1351                  ;
+    1352                  ;
+    1353                  ;   SUBROUTINE DIVC
+    1354                  ;
+    1355                  ;       PERFORMS ONE CYCLE OF DOUBLE
+    1356                  ;       PRECISION FLOATING PT DIVIDE
+    1357                  ;       ENTER AT ENT1 ON FIRST CYCLE
+    1358                  ;       ENTER AT ENT2 ALL THEREAFTER
+    1359                  ;
+    1360  058E CD 6D 04   ENT2:   CALL DLST       ;SHIFT MOVING DIVIDEND
+    1361  0591 DA 9B 05           JC   OVER       ;IF CARRY=1,NUM.GT.D
+    1362  0594 CD 78 05   ENT1:   CALL DCMP       ;COMPARE NUM WITH DEN
+    1363  0597 D2 9B 05           JNC  OVER       ;IF CARRY NOT SET,NUM.GE.DEN
+    1364  059A C9                 RET             
+    1365  059B CD AA 04   OVER:   CALL DSUB       ;CALL DOUBLE SUBTRACT
+    1366  059E 5D                 MOV  E,L        ;SAVE BASE IN E
+    1367  059F 69                 MOV  L,C        ;BASE 6 TO L
+    1368  05A0 2C                 INR  L          ;BASE 7 TO L
+    1369  05A1 2C                 INR  L          ;/***TP
+    1370  05A2 7E                 MOV  A,M        
+    1371  05A3 C6 01              ADI  1          ;ADD 1
+    1372  05A5 77                 MOV  M,A        ;PUT IT BACK
+    1373  05A6 6B                 MOV  L,E        ;RESTORE BASE TO L
+    1374  05A7 C9                 RET             
+    1375                  ;
+    1376                  ;
+    1377                  ;   SUBROUTINE LXFR
+    1378                  ;
+    1379                  ;       MOVES CPTR TO EPTR
+    1380                  ;       MOVES 3 WORDS IF ENTER AT LXFR
+    1381                  ;
+    1382  05A8 16 04      LXFR:   MVI  D,4        ;MOVE 4 WORDS
+    1383  05AA 69         REP5:   MOV  L,C        ;CPTR TO L
+    1384  05AB 7E                 MOV  A,M        ;CPTR> TO A
+    1385  05AC 6B                 MOV  L,E        ;EPTR TO L
+    1386  05AD 77                 MOV  M,A        
+    1387  05AE 0C                 INR  C          ;INCREMENT C
+    1388  05AF 1C                 INR  E          ;INCREMENT E TO NEXT
+    1389  05B0 15                 DCR  D          ;TEST FOR DONE
+    1390  05B1 C2 AA 05           JNZ  REP5       ;GO FOR FOR TILL D=0
+    1391  05B4 7B                 MOV  A,E        ;NOW RESET C AND E
+    1392  05B5 D6 04              SUI  4          ;RESET BACK BY 4
+    1393  05B7 5F                 MOV  E,A        ;PUT BACK IN E
+    1394  05B8 79                 MOV  A,C        ;NOW RESET C
+    1395  05B9 D6 04              SUI  4          ;BY 4
+    1396  05BB 4F                 MOV  C,A        ;BACK TO C
+    1397  05BC C9                 RET             ;DONE
+    1398                  ;
+    1399                  ;   SUBROUTINE LDCP
+    1400                  ;
+    1401                  ;       THIS SUBROUTINE COMPUTES THE CHARACTERISTIC
+    1402                  ;       FOR THE FLOATING DIVIDE ROUTINE
+    1403                  ;
+    1404                  ;   REGISTERS ON EXIT:
+    1405                  ;
+    1406                  ;       A = CONDITION FLAG (SEE ERROR RETURNS)
+    1407                  ;       D,E = GARBAGE
+    1408                  ;       B,C,H,L = SAME AS ON ENTRY
+    1409                  ;
+    1410                  ;   REGISTERS ON ENTRY:
+    1411                  ;
+    1412                  ;       (H,B) = ADDRESS OFF DIVISOR
+    1413                  ;       (H,C) = ADDRESS OF QUOTIENT
+    1414                  ;       (H,L) = ADDRESS OF DIVIDEND
+    1415                  ;
+    1416  05BD CD D0 04   LDCP:   CALL CFCHE      ;SET E=CHAR(H,B), A=CHAR(H,L)
+    1417  05C0 93                 SUB  E          ;SUBTRACT TO GET NEW CHARACTERISTIC
+    1418  05C1 C3 C8 05           JMP  CCHK       ;GO CHECK FOR OVER/UNDERFLOW
+    1419                  ;AND STORE CHARACTERTISTIC
+    1420                  ;
+    1421                  ;
+    1422                  ;   SUBROUTINE LMCP
+    1423                  ;
+    1424                  ;       THIS SUBROUTINE COMPUTES THE CHARACTERISTIC
+    1425                  ;       FOR THE FLOATING MULTIPLY ROUTINE.
+    1426                  ;
+    1427                  ;   REGISTERS ON EXIT:
+    1428                  ;
+    1429                  ;       A = CONDITION FLAG (SEE ERROR RETURNS)
+    1430                  ;       D,E = GARBAGE
+    1431                  ;       B,C,H,L = SAME AS ON ENTRY
+    1432                  ;
+    1433                  ;   REGISTERS ON ENTRY:
+    1434                  ;
+    1435                  ;       (H,B) = ADDRESS OFF MULTIPLICAND
+    1436                  ;       (H,C) = ADDRESS OF PRODUCT
+    1437                  ;       (H,L) = ADDRESS OF MULTIPLIER
+    1438                  ;
+    1439  05C4 CD D0 04   LMCP:   CALL CFCHE      ;SET E=CHAR(H,B), A=CHAR(H,L)
+    1440  05C7 83                 ADD  E          ;ADD TO GET NEW CHARACTERISTIC
+    1441                  ;NOW FALL INTO THE ROUTINE
+    1442                  ;WHICH CHECKS FOR OVER/UNDERFLOW
+    1443                  ;AND STORE CHARACTERTISTIC
+    1444                  ;
+    1445                  ;
+    1446                  ;   SBUROUTINE CCHK
+    1447                  ;
+    1448                  ;       THIS SUBROUTINE CHECKS A CHARACTERISTIC IN
+    1449                  ;       THE ACCUMULATOR FOR OVERFLOW OR UNDERFLOW.
+    1450                  ;       IT THEN STORES THE CHARACTERISTIC, PRESERVING
+    1451                  ;       THE PREVIOUSLY COMPUTED MANTISSA SIGN.
+    1452                  ;
+    1453                  ;  REGISTERS ON ENTRY:
+    1454                  ;
+    1455                  ;       (H,L) = ADDRESS OF ONE OPERAND
+    1456                  ;       (H,B) = ADDRESS OF OTHER OPERAND
+    1457                  ;       (H,C) = ADDRESS OF RESULT
+    1458                  ;       A     = NEW CHARACTERISTIC OF  RESULT
+    1459                  ;
+    1460                  ;   REGISTERS ON EXIT:
+    1461                  ;
+    1462                  ;       A = CONDITION FLAG (SEE ERROR RETURNS)
+    1463                  ;       D,E = GARBAGE
+    1464                  ;       B,C,H,L = SAME AS ON ENTRY
+    1465                  ;
+    1466                  CCHK:                   ;ENTER HERE TO CHECK CHARACTERISTIC
+    1467  05C8 FE 40              CPI  100Q       ;CHECK FOR 0 TO +63
+    1468  05CA DA D7 05           JC   STORC      ;JUMP IF OKAY
+    1469  05CD FE 80              CPI  200Q       ;CHECK FOR +64 TO +127
+    1470  05CF DA DF 05           JC   OFLWC      ;JUMP IF OVERFLOW
+    1471  05D2 FE C0              CPI  300Q       ;CHECK FOR -128 TO -65
+    1472  05D4 DA E6 05           JC   UFLWC      ;JUMP IF UNDERFLOW
+    1473  05D7 5D         STORC:  MOV  E,L        ;SAVE L IN E
+    1474  05D8 69                 MOV  L,C        ;LET L POINT TO RESULT
+    1475  05D9 57                 MOV  D,A        ;SAVE CHARACTERISTIC IN D
+    1476  05DA CD 47 05           CALL INCR3      ;STORE CHARACTERISTIC
+    1477  05DD 6B                 MOV  L,E        ;RESTORE L
+    1478  05DE C9                 RET             ;RETURN
+    1479                  ;
+    1480                  ;   SUBROUTINE OFLWC
+    1481                  ;
+    1482                  ;       THIS ROUTINE WRITES A FLOATING POINT OVERFLOW AT (H,C)
+    1483                  ;       SETS THE CONDITION FLAG, AND RETURNS.
+    1484                  ;
+    1485  05DF 5D         OFLWC:  MOV  E,L        ;SAVE L IN E
+    1486  05E0 69                 MOV  L,C        ;SET L=CPTR, SO (H,L)=ADDR OF RESULT
+    1487  05E1 CD F5 04           CALL WOVR       ;WRITE OUT OVERFLOW
+    1488  05E4 6B                 MOV  L,E        ;RESTORE L
+    1489  05E5 C9                 RET             ;RETURN
+    1490                  ;
+    1491                  ;   SUBROUTINE UFLWC
+    1492                  ;
+    1493                  ;       THIS ROUTINE WRITES A FLOATING POINT UNDERFLOW AT (H,C)
+    1494                  ;       SETS THE CONDITION FLAG, AND RETURNS.
+    1495                  ;
+    1496  05E6 5D         UFLWC:  MOV  E,L        ;SAVE L IN E
+    1497  05E7 69                 MOV  L,C        ;SET L=CPTR, SO (H,L)=ADDR OF RESULT
+    1498  05E8 CD E7 04           CALL WUND       ;WRITE OUT UNDEFLOW
+    1499  05EB 6B                 MOV  L,E        ;RESTORE L
+    1500  05EC C9                 RET             ;RETURN
+    1501                  ;
+    1502                  ;
+    1503                  ;   SUBROUTINE CSIGN
+    1504                  ;
+    1505                  ;       THIS SUBROUTINE COMPUTES AND STORE THE MANTISSA
+    1506                  ;       SIGN FOR THE FLOATING MULTIPLY AND DIVIDE ROUTINES
+    1507                  ;
+    1508                  ;   REGISTERS ON ENTRY:
+    1509                  ;
+    1510                  ;       (H,L) = ADDRESS OF ONE OPERAND
+    1511                  ;       (H,B) = ADDRESS OF OTHER OPERAND
+    1512                  ;       (H,C) = ADDRESS OF RESULT
+    1513                  ;
+    1514                  ;   REGISTERS ON EXIT:
+    1515                  ;
+    1516                  ;       A,D,E = GARBAGE
+    1517                  ;       B,C,H,L = SAME AS ON ENTRY
+    1518                  ;
+    1519                  ;
+    1520  05ED CD FD 05   CSIGN:  CALL MSFH       ;SET A=SIGN(H,L), E=SIGN(H,B)
+    1521  05F0 AB                 XRA  E          ;EXCLUSIVE OR SIGNS TO GET NEW SIGN
+    1522  05F1 CD F5 05           CALL CSTR       ;STORE SIGN INTO RESULT
+    1523  05F4 C9                 RET             ;RETURN
+    1524                  ;
+    1525                  ;
+    1526                  ;   SUBROUTINE CSTR
+    1527                  ;
+    1528                  ;       STORES VALUE IN A IN
+    1529                  ;       CPTR 2
+    1530                  ;       PUTS LPTR IN E
+    1531                  ;
+    1532  05F5 5D         CSTR:   MOV  E,L        ;SAVE LPTR IN E
+    1533  05F6 69                 MOV  L,C        ;CPTR TO L
+    1534  05F7 2C                 INR  L          ;CPTR\2
+    1535  05F8 2C                 INR  L          ;TO L
+    1536  05F9 2C                 INR  L          ;/***TP
+    1537  05FA 77                 MOV  M,A        ;STORE ANSWER
+    1538  05FB 6B                 MOV  L,E        ;LPTR BACK TO L
+    1539  05FC C9                 RET             
+    1540                  ;
+    1541                  ;   SUBROUTINE MSFH
+    1542                  ;
+    1543                  ;       THIS SUBROUTINE FETCHES THE SIGNS OF THE MANTISSAS
+    1544                  ;       OF THE FLOATING POINT NUMBERS POINTED TO BY (H,L)
+    1545                  ;       AND (H,B) INTO THE A AND E REGISTERS RESPECTIVELY.
+    1546                  ;
+    1547                  ;   REGISTERS ON EXIT:
+    1548                  ;
+    1549                  ;       A = SIGN  OF MANTISSA OF (H,L)
+    1550                  ;       E = SIGN OF MANTISSA OF (H,B)
+    1551                  ;       B,C,D,H,L = SAME AS ON ENTRY
+    1552                  ;
+    1553  05FD 5D         MSFH:   MOV  E,L        ;SAVE LPTR
+    1554  05FE 68                 MOV  L,B        ;BPTR TO L
+    1555  05FF 2C                 INR  L          ;BPTR\2
+    1556  0600 2C                 INR  L          ;/***TP
+    1557  0601 2C                 INR  L          ;TO L
+    1558  0602 7E                 MOV  A,M        ;BPTR 2>TO A
+    1559  0603 E6 80              ANI  128        ;SAVE MANT SIGN
+    1560  0605 6B                 MOV  L,E        ;LPTR BACK TO L
+    1561  0606 5F                 MOV  E,A        ;STORE BPTR MANT SIGN
+    1562  0607 2C                 INR  L          ;LPTR\2
+    1563  0608 2C                 INR  L          ;/***TP
+    1564  0609 2C                 INR  L          ;TO L
+    1565  060A 7E                 MOV  A,M        ;LPTR\2>TO A
+    1566  060B E6 80              ANI  128        ;SAVE LPTR MANT SIGN
+    1567  060D 2D                 DCR  L          ;LPTR BACK
+    1568  060E 2D                 DCR  L          ;TO L
+    1569  060F 2D                 DCR  L          ;/***TP
+    1570  0610 C9                 RET             
+    1571                  ;
+    1572                  ;
+    1573                  ;   SUBROUTINE BCTL
+    1574                  ;
+    1575                  ;           MOVES BPTR CHAR TO LPTR CHAR
+    1576                  ;           DESTROYS E
+    1577                  ;
+    1578  0611 5D         BCTL:   MOV  E,L        ;LPTR TO E
+    1579  0612 68                 MOV  L,B        ;BPTR TO L
+    1580  0613 2C                 INR  L          ;BPTR 2
+    1581  0614 2C                 INR  L          ;/***TP
+    1582  0615 2C                 INR  L          ;TO L
+    1583  0616 7E                 MOV  A,M        ;BPTR CHAR TO A
+    1584  0617 6B                 MOV  L,E        ;LPTR TO L
+    1585  0618 2C                 INR  L          ;LPTR 2
+    1586  0619 2C                 INR  L          ;TO L
+    1587  061A 2C                 INR  L          ;/***TP
+    1588  061B 77                 MOV  M,A        ;STORE BPTR CHAR IN LPTR CHAR
+    1589  061C 6B                 MOV  L,E        ;LPTR TO L
+    1590  061D C9                 RET             
+    1591                  ;
+    1592                  ;
+    1593                  ;******************************************************
+    1594                  ;       ///SQUARE ROOT
+    1595                  ;          ***************
+    1596                  ;       THE L REG PTS TO THE NUMBER TO BE
+    1597                  ;       OPERATED ON.
+    1598                  ;       THE B REG PTS TO THE LOC WHERE
+    1599                  ;       THE RESULT IS TO BE STORED
+    1600                  ;       THE C REG PTS TO 17(10) SCRATCH 
+    1601                  ;       AREA.
+    1602                  ;       WHERE:
+    1603                  ;       C = INTERATION COUNT
+    1604                  ;       C+1 = L REG
+    1605                  ;       C+2 = B REG
+    1606                  ;       C+3 TO C+6 = INTRL REG 1
+    1607                  ;       C+7 TO C+10 = INTRL REG 2
+    1608                  ;       C+11 TO C+14 = INTRL REG 3
+    1609                  ;       C+15 = 
+    1610                  ;******************************************************
+    1611  061E 7D         DSQRT:  MOV  A,L        ;STORE L IN
+    1612  061F 69                 MOV  L,C        ;2ND WRD SCRTCH
+    1613  0620 36 00              MVI  M,0        ;INITIALIZE ITER COUNT
+    1614  0622 2C                 INR  L          
+    1615  0623 77                 MOV  M,A        
+    1616  0624 2C                 INR  L          ;STR B IN 3RD
+    1617  0625 70                 MOV  M,B        ;WRD OF SCRTCH
+    1618  0626 2C                 INR  L          ;SET C TO INTRL
+    1619  0627 4D                 MOV  C,L        ;REG I
+    1620  0628 6F                 MOV  L,A        ; SET L PRT AT
+    1621  0629 7C                 MOV  A,H        ;SET REGS FOR COPY
+    1622  062A CD 3A 08           CALL COPY       ; CPY TC INTRL REG1
+    1623  062D CD D8 07           CALL GCHR       ;PUT CHR IN A
+    1624  0630 47                 MOV  B,A        ;MAKE COPY
+    1625  0631 E6 80              ANI  200Q       ;OK NEG
+    1626  0633 C2 9D 06           JNZ  ERSQ       
+    1627  0636 78                 MOV  A,B        
+    1628  0637 E6 40              ANI  100Q       ;OK NEG EXP
+    1629  0639 78                 MOV  A,B        
+    1630  063A CA 46 06           JZ   EPOS       
+    1631  063D 1F                 RAR             ;DIV BY 2
+    1632  063E E6 7F              ANI  177Q       
+    1633  0640 F6 40              ORI  100Q       ;SET SIGN BIT
+    1634  0642 77                 MOV  M,A        ;SAVE 1ST APPROX
+    1635  0643 C3 4A 06           JMP  AGN4       
+    1636  0646 1F         EPOS:   RAR             ;DIV BY 2
+    1637  0647 E6 7F              ANI  177Q       
+    1638  0649 77                 MOV  M,A        ;SAVE IST APPROX
+    1639  064A 69         AGN4:   MOV  L,C        ;SET REGS
+    1640  064B 79                 MOV  A,C        ;TO COPY 1ST
+    1641  064C C6 04              ADI  4          ;APPROX
+    1642  064E 4F                 MOV  C,A        ;INTO INTRL REG 2
+    1643  064F 7C                 MOV  A,H        ;FRM INTRL REG1
+    1644  0650 CD 3A 08           CALL COPY       
+    1645  0653 79                 MOV  A,C        
+    1646  0654 D6 04              SUI  4          ;MULTIPLY INTRL REG 1
+    1647  0656 6F                 MOV  L,A        
+    1648  0657 41                 MOV  B,C        ;TIME INTRL REG2
+    1649  0658 C6 08              ADI  10Q        ;PLASE RESULT IN
+    1650  065A 4F                 MOV  C,A        ;INMTRL REG 3
+    1651  065B CD E3 03           CALL LMUL       
+    1652  065E 79                 MOV  A,C        
+    1653  065F D6 08              SUI  10Q        ;COPY ORG INTO
+    1654  0661 4F                 MOV  C,A        ;INTRL REG 1
+    1655  0662 D6 02              SUI  2          
+    1656  0664 6F                 MOV  L,A        
+    1657  0665 6E                 MOV  L,M        
+    1658  0666 7C                 MOV  A,H        
+    1659  0667 CD 3A 08           CALL COPY       
+    1660  066A 79                 MOV  A,C        
+    1661  066B C6 08              ADI  10Q        ;ADD INTRL
+    1662  066D 6F                 MOV  L,A        ;REG3 OT
+    1663  066E 41                 MOV  B,C        ;INTRL REG1
+    1664  066F C6 04              ADI  4          ;ANS TO INTRL
+    1665  0671 4F                 MOV  C,A        ;REG3
+    1666  0672 CD E0 02           CALL LADD       
+    1667  0675 7D                 MOV  A,L        
+    1668  0676 D6 04              SUI  4          ;DIV INTRL REG 3
+    1669  0678 47                 MOV  B,A        ;BY INTRL REG 2
+    1670  0679 D6 04              SUI  4          ;PUT ANSR IN INTRL
+    1671  067B 4F                 MOV  C,A        ;REG1
+    1672  067C CD 84 02           CALL LDIV       
+    1673  067F CD D8 07           CALL GCHR       
+    1674  0682 D6 01              SUI  1          
+    1675  0684 E6 7F              ANI  177Q       
+    1676  0686 77                 MOV  M,A        
+    1677  0687 79                 MOV  A,C        
+    1678  0688 D6 03              SUI  3          ;C PTS TO INTRL REG 1
+    1679  068A 6F                 MOV  L,A        ;GET INTR
+    1680  068B 46                 MOV  B,M        ;COUNT NOW INCR
+    1681  068C 04                 INR  B          
+    1682  068D 70                 MOV  M,B        
+    1683  068E 78                 MOV  A,B        
+    1684  068F FE 05              CPI  5          ;IF = 5 RTN ANS
+    1685  0691 C2 4A 06           JNZ  AGN4       ;OTERHWISE CONT
+    1686  0694 69                 MOV  L,C        
+    1687  0695 2D         ALDN:   DCR  L          ;COPY ANS INTO
+    1688  0696 4E                 MOV  C,M        ;LOC REQUESTED
+    1689  0697 2C                 INR  L          
+    1690  0698 7C                 MOV  A,H        
+    1691  0699 CD 3A 08           CALL COPY       
+    1692  069C C9                 RET             
+    1693  069D 69         ERSQ:   MOV  L,C        
+    1694  069E CD 11 05           CALL WZER       ;WRITE A FLOATING ZERO
+    1695  06A1 C3 95 06           JMP  ALDN       
+    1696                  ;
+    1697                  ;
+    1698                  ;******************************************************
+    1699                  ;       ///SWAP TWO NUMBERS IN SAME MEMORY PAGE
+    1700                  ;          ****************
+    1701                  ;       THE HL PTS TO THE FIRST NUMBER.
+    1702                  ;       THE C REG PTS TO THE SECOND NUMBER.
+    1703                  ;          ON RETURN B=H, C=C+4, L=L+4.
+    1704                  ;******************************************************
+    1705  06A4 D5         LXCHG:  PUSH D          
+    1706  06A5 44                 MOV  B, H       
+    1707  06A6 16 04              MVI  D, 4       ;COUNTER
+    1708  06A8 0A         LXCHG1: LDAX B          
+    1709  06A9 77                 MOV  M, A       ;MOVE 4 BYTES
+    1710  06AA 2C                 INR  L          
+    1711  06AB 0C                 INR  C          
+    1712  06AC 15                 DCR  D          
+    1713  06AD C2 A8 06           JNZ  LXCHG1     
+    1714  06B0 D1                 POP  D          
+    1715  06B1 C9                 RET             
+    1716                  ;
+    1717                  ;
+    1718                  ;******************************************************
+    1719                  ;       //// FLOATING POINT CONSTANTS
+    1720                  ;******************************************************
+    1721  06B2 C3 50 00   TEN5:   DB   303Q,120Q,0Q,21Q; 100000 (10)
+          06B5 11      
+    1722  06B6 9C 40 00   TEN4:   DB   234Q,100Q,0Q,16Q; 10000 (10)
+          06B9 0E      
+    1723  06BA FA 00 00   TEN3:   DB   372Q,0Q,0Q,12Q; 1000 (10)
+          06BD 0A      
+    1724  06BE C8 00 00   TEN2:   DB   310Q,0Q,0Q,7Q; 100 (10)
+          06C1 07      
+    1725  06C2 A0 00 00   TEN:    DB   240Q,0Q,0Q,4Q; 10 (10)
+          06C5 04      
+    1726  06C6 80 00 00   ONE:    DB   200Q,0Q,0Q,1Q; 1 (10)
+          06C9 01      
+    1727  06CA 00 00 00   ZERO:   DB   0Q,0Q,0Q,100Q; 0
+          06CD 40      
+    1728  06CE FF FF 00   MAXINT: DB   377Q,377Q,0Q,17Q;32767 (10)
+          06D1 0F      
+    1729                  ;
+    1730                  ;
+    1731                  ;******************************************************
+    1732                  ;       //// 5 DIGIT FLOATING PT. OUTPUT
+    1733                  ;******************************************************
+    1734                  ;
+    1735                  ;       *******ROUTINE TO CONVERT FLOATING PT.
+    1736                  ;       ***NUMBERS TO ASCII AND OUTPUT THEM
+    1737                  ;       ***HL POINTS TO THE NUMBER TO BE OUTPUT
+    1738                  ;       ***C POINTS TO A 17 OCTAL-WORD SCRATCH AREA.
+    1739                  ;
+    1740  06D2 CD 5E 04   CVRT:   CALL ZCHK       ;CHECK FOR NEW ZERO
+    1741  06D5 C2 EA 06           JNZ  NNZRO      ;NOT ZERO
+    1742  06D8 0C                 INR  C          ;IT WAS, OFFSET C BY 2
+    1743  06D9 0C                 INR  C          
+    1744  06DA 69                 MOV  L,C        
+    1745  06DB CD 11 05           CALL WZER       ;WRITE ZERO
+    1746  06DE CD CB 07           CALL SIGN       ;SEND SPACE ON POS ZERO
+    1747  06E1 2C                 INR  L          ;PNT TO DECIMAL EXPONENT
+    1748  06E2 2C                 INR  L          
+    1749  06E3 2C                 INR  L          
+    1750  06E4 2C                 INR  L          
+    1751  06E5 AF                 XRA  A          ;SET IT TO ZERO
+    1752  06E6 77                 MOV  M,A        
+    1753  06E7 C3 49 07           JMP  MDSKP      ;OUTPUT IT
+    1754  06EA 56         NNZRO:  MOV  D,M        ;GET THE NUMBER TO CONVERT
+    1755  06EB 2C                 INR  L          
+    1756  06EC 46                 MOV  B,M        
+    1757  06ED 2C                 INR  L          
+    1758  06EE 5E                 MOV  E,M        
+    1759  06EF 2C                 INR  L          ;4 WORD***TP
+    1760  06F0 7E                 MOV  A,M        ;/***TP
+    1761  06F1 0C                 INR  C          ;OFFSET SCRATCH POINTER BY 2
+    1762  06F2 0C                 INR  C          
+    1763  06F3 69                 MOV  L,C        ;L NOT NEEDED ANY MORE
+    1764  06F4 72                 MOV  M,D        ;SAVE NUMBER IN SCRATCH
+    1765  06F5 2C                 INR  L          
+    1766  06F6 70                 MOV  M,B        
+    1767  06F7 2C                 INR  L          
+    1768  06F8 73                 MOV  M,E        ;/***TP
+    1769  06F9 2C                 INR  L          ;/***TP
+    1770  06FA 47                 MOV  B,A        ;SAVE COPY OF CHAR & SIGN
+    1771  06FB E6 7F              ANI  177Q       ;GET ONLY CHAR.
+    1772  06FD 77                 MOV  M,A        ;SAVE ABS(NUMBER)
+    1773  06FE FE 40              CPI  100Q       ;CK FOR ZERO
+    1774  0700 CA 07 07           JZ   NZRO       
+    1775  0703 D6 01              SUI  1          ;GET SIGN OF DEC. EXP
+    1776  0705 E6 40              ANI  100Q       ;GET SIGN OF CHAR.
+    1777  0707 07         NZRO:   RLC             ;MOVE IT TO SIGN POSITION
+    1778  0708 2C                 INR  L          ;MOVE TO DECIMAL EXP.
+    1779  0709 77                 MOV  M,A        ;SAVE SIGN OF EXP.
+    1780  070A 78                 MOV  A,B        ;GET MANT. SIGH BACK
+    1781  070B CD CB 07           CALL SIGN       ;OUTPUT SIGN
+    1782  070E 2E B2              MVI  L,LOW TEN5 ;TRY MULT. OR DIV. BY 100000 FIRST
+    1783  0710 CD 2C 08           CALL COPT       ;MAKE A COPY IN RAM
+    1784  0713 CD D8 07   TST8:   CALL GCHR       ;GET CHAR. OF NUMBER
+    1785  0716 47                 MOV  B,A        ;SAVE A COPY
+    1786  0717 E6 40              ANI  100Q       ;GET ABSOLUTE VALUE OF CHAR
+    1787  0719 78                 MOV  A,B        ;INCASE PLUS
+    1788  071A CA 20 07           JZ   GOTV       ;ALREADY PLUS
+    1789  071D 3E 80              MVI  A,200Q     ;MAKE MINUS INTO PLUS
+    1790  071F 90                 SUB  B          ;PLUS=200B-CHAR
+    1791  0720 FE 12      GOTV:   CPI  22Q        ;TEST FOR USE OF 100000
+    1792  0722 FA 2E 07           JM   TRY1       ;WONT GO
+    1793  0725 CD DE 07           CALL MORD       ;WILL GO SO DO IT
+    1794  0728 C6 05              ADI  5          ;INCREMENT DEC. EXPONENT BY 5
+    1795  072A 77                 MOV  M,A        ;UPDATE MEM
+    1796  072B C3 13 07           JMP  TST8       ;GO TRY AGAIN
+    1797  072E 2E C2      TRY1:   MVI  L,LOW TEN  ;NOW USE JUST TEN
+    1798  0730 CD 2C 08           CALL COPT       ;PUT IT IN RAM
+    1799  0733 CD D8 07   TST1:   CALL GCHR       ;GET CHARACTERISTIC
+    1800  0736 FE 01              CPI  1          ;MUST GET IN RANGE 1 TO 6
+    1801  0738 F2 44 07           JP   OK1        ;ATLEAST ITS 1 OR BIGGER
+    1802  073B CD DE 07   MDGN:   CALL MORD       ;MUST MUL OF DIV BY 10
+    1803  073E C6 01              ADI  1          ;INCREMENT DECIMAL EXP.
+    1804  0740 77                 MOV  M,A        ;UPDATE MEM
+    1805  0741 C3 33 07           JMP  TST1       ;NOW TRY AGAIN
+    1806  0744 FE 07      OK1:    CPI  7          ;TEST FOR LESS THAN 7
+    1807  0746 F2 3B 07           JP   MDGN       ;NOPE - 7 OR GREATER
+    1808  0749 69         MDSKP:  MOV  L,C        ;SET UP DIGIT COUNT
+    1809  074A 2D                 DCR  L          
+    1810  074B 2D                 DCR  L          ;IN 1ST WORD OF SCRATCH
+    1811  074C 36 05              MVI  M,5        ;5 DIGITS
+    1812  074E 5F                 MOV  E,A        ;SAVE CHAR. AS LEFT SHIFT COUNT
+    1813  074F CD B1 07           CALL LSFT       ;SHIFT LEFT PROPER NUMBER
+    1814  0752 FE 0A              CPI  12Q        ;TEST FOR 2 DIGITS HERE
+    1815  0754 F2 04 08           JP   TWOD       ;JMP IF 2 DIGITS TO OUTPUT
+    1816  0757 CD 75 07           CALL DIGO       ;OUTPUT FIRST DIGIT
+    1817  075A CD 89 07   POPD:   CALL MULTT      ;MULTIPLY THE NUMBER BY 10
+    1818  075D CD 75 07   INPOP:  CALL DIGO       ;PRINT DIGIT IN A
+    1819  0760 C2 5A 07           JNZ  POPD       ;MORE DIGITS?
+    1820  0763 3E C5              MVI  A,305Q     ;NO SO PRINT E
+    1821  0765 CD F5 0F           CALL OUTR       ;BASIC CALL TO OUTPUT
+    1822  0768 CD F9 07           CALL GETEX      ;GET DECIMAL EXP
+    1823  076B 47                 MOV  B,A        ;SAVE A COPY
+    1824  076C CD CB 07           CALL SIGN       ;OUTPUT SIGN
+    1825  076F 78                 MOV  A,B        ;GET EXP BACK
+    1826  0770 E6 3F              ANI  77Q        ;GET GOOD BITS
+    1827  0772 CD 1B 08           CALL CTWO       ;GO CONVERT 2 DIGITS
+    1828  0775 C6 B0      DIGO:   ADI  260Q       ;MAKE A INTO ASCII
+    1829  0777 CD F5 0F           CALL OUTR       ;OUTPUT DIGIT
+    1830  077A 69                 MOV  L,C        ;GET DIGIT COUNT
+    1831  077B 2D                 DCR  L          ;BACK UP TO DIGIT COUNT
+    1832  077C 2D                 DCR  L          
+    1833  077D 7E                 MOV  A,M        ;TEST FOR DECIMAL PT
+    1834  077E FE 05              CPI  5          ;PRINT . AFTER 1ST DIGIT
+    1835  0780 3E AE              MVI  A,256Q     ;JUST IN CASE
+    1836  0782 CC F5 0F           CZ   OUTR       ;OUTPUT . IF 1ST DIGIT
+    1837  0785 56                 MOV  D,M        ;NOW DECREMENT DIGIT COUNT
+    1838  0786 15                 DCR  D          
+    1839  0787 72                 MOV  M,D        ;UPDATE MEM AND LEAVE FLOPS SET
+    1840  0788 C9                 RET             ;SERVES AS TERM FOR DIGO & CVRT
+    1841  0789 1E 01      MULTT:  MVI  E,1        ;MULT. BY 10 (START WITH X2)
+    1842  078B CD B1 07           CALL LSFT       ;LEFT SHIFT 1 = X2
+    1843  078E 69                 MOV  L,C        ;SAVE X2 IN "RESULT"
+    1844  078F 2D                 DCR  L          ;SET TO TOP OF NUMBER
+    1845  0790 79                 MOV  A,C        ;SET C TO RESULT
+    1846  0791 C6 09              ADI  11Q        
+    1847  0793 4F                 MOV  C,A        ;NOW C SET RIGHT
+    1848  0794 7C                 MOV  A,H        ;SHOW RAM TO RAM TRANSFER
+    1849  0795 CD 3A 08           CALL COPY       ;SAVE X2 FINALLY
+    1850  0798 79                 MOV  A,C        ;MUST RESET C
+    1851  0799 D6 09              SUI  11Q        ;BACK TO NORMAL
+    1852  079B 4F                 MOV  C,A        
+    1853  079C 1E 02              MVI  E,2        ;NOW GET (X2)X4=X8
+    1854  079E 69                 MOV  L,C        ;BUT MUST SAVE OVERFLOW
+    1855  079F 2D                 DCR  L          
+    1856  07A0 CD B5 07           CALL TLP2       ;GET X8
+    1857  07A3 69                 MOV  L,C        ;SET UP TO CALL DADD
+    1858  07A4 79                 MOV  A,C        ;SET B TO X2
+    1859  07A5 C6 0A              ADI  12Q        ;TO X2
+    1860  07A7 47                 MOV  B,A        
+    1861  07A8 CD 8A 04           CALL DADD       ;ADD TWO LOW WORDS
+    1862  07AB 2D                 DCR  L          ;BACK UP TO OVERFLOW
+    1863  07AC 7E                 MOV  A,M        ;GET IT
+    1864  07AD 68                 MOV  L,B        ;NOW SET TO X2 OVERFLOW
+    1865  07AE 2D                 DCR  L          ;ITS AT B-1
+    1866  07AF 8E                 ADC  M          ;ADD WITH CARRY - CARRY WAS PRESERVED
+    1867  07B0 C9                 RET             ;ALL DONE, RETURN OVERFLOW IN A
+    1868  07B1 69         LSFT:   MOV  L,C        ;SET PTR FOR LEFT SHIFT OF NUMBER
+    1869  07B2 2D                 DCR  L          ;BACK UP TO OVERFLOW
+    1870  07B3 AF                 XRA  A          ;OVERFLOW=0 1ST TIME
+    1871  07B4 77         TLOOP:  MOV  M,A        ;SAVE OVERFLOW
+    1872  07B5 1D         TLP2:   DCR  E          ;TEST FOR DONE
+    1873  07B6 F8                 RM              ;DONE WHEN E MINUS
+    1874  07B7 2C                 INR  L          ;MOVE TO LOW
+    1875  07B8 2C                 INR  L          
+    1876  07B9 2C                 INR  L          ;/***TP EXTENSION
+    1877  07BA 7E                 MOV  A,M        ;SHIFT LEFT 4 BYTES
+    1878  07BB 17                 RAL             
+    1879  07BC 77                 MOV  M,A        ;PUT BACK
+    1880  07BD 2D                 DCR  L          ;/***TP - ALL DONE
+    1881  07BE 7E                 MOV  A,M        ;GET LOW
+    1882  07BF 17                 RAL             ;SHIFT LEFT 1
+    1883  07C0 77                 MOV  M,A        ;RESTORE IT
+    1884  07C1 2D                 DCR  L          ;BACK UP TO HIGH
+    1885  07C2 7E                 MOV  A,M        ;GET HIGH
+    1886  07C3 17                 RAL             ;SHIFT IT LEFT WITH CARRY
+    1887  07C4 77                 MOV  M,A        ;PUT IT BACK
+    1888  07C5 2D                 DCR  L          ;BACK UP TO OVERFLOW
+    1889  07C6 7E                 MOV  A,M        ;GET OVERFLOW
+    1890  07C7 17                 RAL             ;SHIFT IT LEFT
+    1891  07C8 C3 B4 07           JMP  TLOOP      ;GO FOR MORE
+    1892  07CB E6 80      SIGN:   ANI  200Q       ;GET SIGN BIT
+    1893  07CD 3E A0              MVI  A,240Q     ;SPACE INSTEAD OF PLUS
+    1894  07CF CA D4 07           JZ   PLSV       ;TEST FOR +
+    1895  07D2 3E AD              MVI  A,255Q     ;NEGATIVE
+    1896  07D4 CD F5 0F   PLSV:   CALL OUTR       ;OUTPUT SIGN
+    1897  07D7 C9                 RET             
+    1898  07D8 69         GCHR:   MOV  L,C        ;GET CHARCTERISTIC
+    1899  07D9 2C         GETA:   INR  L          ;MOVE TO IT
+    1900  07DA 2C                 INR  L          
+    1901  07DB 2C                 INR  L          ;/***TP
+    1902  07DC 7E                 MOV  A,M        ;FETCH INTO A
+    1903  07DD C9                 RET             ;DONE
+    1904  07DE CD F9 07   MORD:   CALL GETEX      ;MUL OR DIV DEPENDING ON EXP
+    1905  07E1 5F                 MOV  E,A        ;SAVE DECIMAL EXP
+    1906  07E2 45                 MOV  B,L        ;SET UP TO MULT OR DIV
+    1907  07E3 04                 INR  B          ;NOW BOP POINTER SET
+    1908  07E4 69                 MOV  L,C        ;L POINTS TO NUMBER TO CONVERT
+    1909  07E5 79                 MOV  A,C        ;POINT C AT "RESULT" AREA
+    1910  07E6 C6 09              ADI  11Q        ;IN SCRATCH
+    1911  07E8 4F                 MOV  C,A        ;NOW C SET RIGHT
+    1912  07E9 7B                 MOV  A,E        ;NOW TEST FOR MUL
+    1913  07EA E6 80              ANI  200Q       ;TEST NEGATIVE DEC. EXP.
+    1914  07EC CA FE 07           JZ   DIVIT      ;IF EXP IS + THEN DIVIDE
+    1915  07EF CD E3 03           CALL LMUL       ;MULT.
+    1916  07F2 79         FINUP:  MOV  A,C        ;SAVE LOC. OF RESULT
+    1917  07F3 4D                 MOV  C,L        ;C=LOC OF NUMBER (IT WAS DESTROYED)
+    1918  07F4 6F                 MOV  L,A        ;SET L TO LOC. OF RESUTL
+    1919  07F5 7C                 MOV  A,H        ;SHOW RAM TO RAM TRANSFER
+    1920  07F6 CD 3A 08           CALL COPY       ;MOVE RESULT TO NUMBER
+    1921  07F9 69         GETEX:  MOV  L,C        ;NOW GET DECIMAL EXP
+    1922  07FA 2C                 INR  L          
+    1923  07FB C3 D9 07           JMP  GETA       ;USE PART OF GCHR
+    1924  07FE CD 84 02   DIVIT:  CALL LDIV       ;DIVIDE
+    1925  0801 C3 F2 07           JMP  FINUP      
+    1926  0804 CD 1B 08   TWOD:   CALL CTWO       ;CONVERT TO 2 DIGITS
+    1927  0807 47                 MOV  B,A        ;SAVE ONES DIGIT
+    1928  0808 CD F9 07           CALL GETEX      ;GET DECIMAL EXP
+    1929  080B 5F                 MOV  E,A        ;SAVE A COPY
+    1930  080C E6 80              ANI  200Q       ;TEST FOR NEGATIVE
+    1931  080E CA 17 08           JZ   ADD1       ;BUMP EXP BY 1 SINCE 2 DIGITS
+    1932  0811 1D                 DCR  E          ;DECREMENT NEGATIVE EXP SINCE 2 DIGITS
+    1933  0812 73         FINIT:  MOV  M,E        ;RESTORE EXP WITH NEW VALUE
+    1934  0813 78                 MOV  A,B        ;NOW DO 2ND DIGIT
+    1935  0814 C3 5D 07           JMP  INPOP      ;GO OUT 2ND AND REST FO DIGITS
+    1936  0817 1C         ADD1:   INR  E          ;COMPENSATE FOR 2 DIGITS
+    1937  0818 C3 12 08           JMP  FINIT      
+    1938  081B 1E FF      CTWO:   MVI  E,377Q     ;CONVERT 2 DIGIT BIN TO BCD
+    1939  081D 1C         LOOP:   INR  E          ;ADD UP TENS DIGIT
+    1940  081E D6 0A              SUI  12Q        ;SUBTRACT 10
+    1941  0820 F2 1D 08           JP   LOOP       ;TIIL NEGATIVE RESULT
+    1942  0823 C6 0A              ADI  12Q        ;RESTORE ONES DIGIT
+    1943  0825 47                 MOV  B,A        ;SAVE ONES DIGIT
+    1944  0826 7B                 MOV  A,E        ;GET TENS DIGIT
+    1945  0827 CD 75 07           CALL DIGO       ;OUTPUT IT
+    1946  082A 78                 MOV  A,B        ;SET A TO 2ND DIGIT
+    1947  082B C9                 RET             
+    1948  082C 79         COPT:   MOV  A,C        ;COPY FROM 10N TO RAM
+    1949  082D C6 05              ADI  5          
+    1950  082F 4F                 MOV  C,A        ;SET C TO PLACE TO PUT
+    1951  0830 3E 06              MVI  A,HIGH TEN5
+    1952  0832 CD 3A 08           CALL COPY       ;COPY IT
+    1953  0835 79                 MOV  A,C        ;NOW RESET C
+    1954  0836 D6 05              SUI  5          
+    1955  0838 4F                 MOV  C,A        ;ITS RESET
+    1956  0839 C9                 RET             
+    1957  083A 44         COPY:   MOV  B,H        ;SAVE RAM H
+    1958  083B 67                 MOV  H,A        ;SET TO SOURCE H
+    1959  083C 7E                 MOV  A,M        ;GET 4 WORDS INTO THE REGS.
+    1960  083D 2C                 INR  L          
+    1961  083E 56                 MOV  D,M        
+    1962  083F 2C                 INR  L          
+    1963  0840 5E                 MOV  E,M        
+    1964  0841 2C                 INR  L          
+    1965  0842 6E                 MOV  L,M        ;LAST ONE ERASES L
+    1966  0843 60                 MOV  H,B        ;SET TO DESTINATION RAM
+    1967  0844 45                 MOV  B,L        ;SAVE 4TH WORD IN B
+    1968  0845 69                 MOV  L,C        ;SET TO DESTINATION
+    1969  0846 77                 MOV  M,A        ;SAVE FIRST WORD
+    1970  0847 2C                 INR  L          
+    1971  0848 7E                 MOV  A,M        ;SAVE THIS WORD IN A (INPUT SAVES C HERE)
+    1972  0849 72                 MOV  M,D        ;NOW PUT 2ND WORD
+    1973  084A 2C                 INR  L          
+    1974  084B 73                 MOV  M,E        
+    1975  084C 2C                 INR  L          
+    1976  084D 70                 MOV  M,B        ;ALL 4  COPIED NOW
+    1977  084E C9                 RET             ;ALL DONE
+    1978                  ;
+    1979                  ;
+    1980                  ;
+    1981                  ;       SCRATCH MAP FOR I/O CONVERSION ROUTINES
+    1982                  ;
+    1983                  ;       RELATIVE TO (C+2)USE
+    1984                  ;       C-2             DIGIT COUNT
+    1985                  ;       C-1             OVERFLOW
+    1986                  ;       C               HIGH NUMBER - MANTISSA
+    1987                  ;       C+1             LOW NUMBER
+    1988                  ;       C+2             CHARACTERISTIC
+    1989                  ;       C+3             DECIMAL EXPONEXT (SIGN & MAG.)
+    1990                  ;       C+4             TEN**N
+    1991                  ;       C+5             TEN**N
+    1992                  ;       C+6             TEN**N
+    1993                  ;       C+7             RESULT OF MULT & DIV
+    1994                  ;       C+8             AND TEMP FOR X2
+    1995                  ;       C+9             "       "
+    1996                  ;       C+10            L FOR NUMBER TO GO INTO (INPUT ONLY)
+    1997                  ;       C+11            DIGIT JUST INPUT (INPUT ONLY)
+    1998                  ;
+    1999                  ;
+    2000                  ;                       /*****BEGIN INPUT*************
+    2001                  ;
+    2002                  ;
+    2003                  
+    2004                  ;*******************************************************
+    2005                  ;       //// 4 1/2 DIGIT INPUT ROUTINE
+    2006                  ;*******************************************************
+    2007                  ;
+    2008                  ; ON CALL /H POINTS TO SCRATCH PAGE
+    2009                  ;         /L POINTS TO WHERE TO PUT INPUT NUMBER
+    2010                  ;         /C POINTS TO SCRATCH AREA
+    2011                  ;
+    2012  084F 45         INPUT:  MOV  B,L        ;SAVE ADDRESS WHERE DATA IS TO GO
+    2013  0850 79                 MOV  A,C        ;IN SCRATCH
+    2014  0851 C6 0F              ADI  17Q        ;COMPUTE LOC. IN SCRATCH
+    2015  0853 6F                 MOV  L,A        
+    2016  0854 70                 MOV  M,B        ;PUT IT
+    2017  0855 0C                 INR  C          ;OFFSET SCRATCH POINTER
+    2018  0856 0C                 INR  C          ;BY 2
+    2019  0857 CD 5D 09           CALL ZROIT      ;ZERO NUMBER
+    2020  085A 2C                 INR  L          ;AND ZERO
+    2021  085B 77                 MOV  M,A        ;DECIMAL EXPONENT
+    2022  085C CD FA 08           CALL GNUM       ;GET INTEGER PART OF NUM
+    2023  085F FE FE              CPI  376Q       ;TERM=.?
+    2024  0861 CA B4 08           JZ   DECPT      ;YES
+    2025  0864 FE 15      TSTEX:  CPI  25Q        ;TEST FOR E
+    2026  0866 CA C9 08           JZ   INEXP      ;YES - HANDLE EXP
+    2027  0869 FE F0              CPI  360Q       ;TEST FOR SPACE TERM (' '-'0')
+    2028  086B C2 00 00           JNZ  ERRLN3     ;NOT LEGAL TERM
+    2029  086E CD 43 09           CALL FLTSGN     ;FLOAT # AND SIGN IT
+    2030  0871 CD F9 07   SCALE:  CALL GETEX      ;GET DECIMAL EXP
+    2031  0874 E6 7F              ANI  177Q       ;GET GOOD BITS
+    2032  0876 5F                 MOV  E,A        ;SAVE COPY
+    2033  0877 E6 40              ANI  100Q       ;GET SIGN OF EXP
+    2034  0879 07                 RLC             ;INTO SIGN BIT
+    2035  087A B7                 ORA  A          ;SET FLOPS
+    2036  087B 47                 MOV  B,A        ;SAVE SIGN
+    2037  087C 7B                 MOV  A,E        ;GET EXP BACK
+    2038  087D CA 83 08           JZ   APLS       ;JMP IS +
+    2039  0880 3E 80              MVI  A,200Q     ;MAKE MINUS +
+    2040  0882 93                 SUB  E          ;NOW ITS +
+    2041  0883 80         APLS:   ADD  B          ;SIGN NUMBER
+    2042  0884 77                 MOV  M,A        ;SAVE EXP (SIGN & MAG.)
+    2043                  ;        MVI     L,(TEN5 AND 377Q)  ;TRY MORD WITH 10**5 FIRST
+    2044  0885 2E B2              MVI  L,LOW TEN5 
+    2045  0887 CD 2C 08           CALL COPT       ;TRANSFER TO RAM
+    2046  088A CD F9 07           CALL GETEX      ;GET DECIMAL EXP
+    2047  088D E6 3F      INT5:   ANI  77Q        ;GET MAG. OF EXP
+    2048  088F FE 05              CPI  5Q         ;TEST FOR USE OF 10**5
+    2049  0891 FA 9D 08           JM   TRYTN      ;WONT GO - TRY 10
+    2050  0894 CD DE 07           CALL MORD       ;WILL GO SO DO IT
+    2051  0897 D6 05              SUI  5Q         ;MAG = MAG -5
+    2052  0899 77                 MOV  M,A        ;UPDATE DEC. EXP IN MEM
+    2053  089A C3 8D 08           JMP  INT5       ;GO TRY AGAIN
+    2054                  ;TRYTN:  MVI     L,(TEN AND 377Q)  ;PUT TEN IN RAM
+    2055  089D 2E C2      TRYTN:  MVI  L,LOW TEN  
+    2056  089F CD 2C 08           CALL COPT       
+    2057  08A2 CD F9 07           CALL GETEX      ;SET UP FOR LOOP
+    2058  08A5 E6 3F      INT1:   ANI  77Q        ;GET MAGNITUDE
+    2059  08A7 B7                 ORA  A          ;TEST FOR 0
+    2060  08A8 CA 47 09           JZ   SAVEN      ;DONE, MOVE NUM OUT AND GET OUT
+    2061  08AB CD DE 07           CALL MORD       ;NOT DONE - DO 10
+    2062  08AE D6 01              SUI  1Q         ;EXP = EXP -1
+    2063  08B0 77                 MOV  M,A        ;UPDATE MEM
+    2064  08B1 C3 A5 08           JMP  INT1       ;TRY AGAIN
+    2065  08B4 69         DECPT:  MOV  L,C        ;ZERO DIGIT COUNT
+    2066  08B5 2D                 DCR  L          ;SINCE ITS NECESSARY
+    2067  08B6 2D                 DCR  L          ;TO COMPUTE EXP.
+    2068  08B7 36 00              MVI  M,0        ;ZEROED
+    2069  08B9 CD 3D 09           CALL EP1        ;GNUM IN MIDDLE
+    2070  08BC 5F                 MOV  E,A        ;SAVE TERMINATOR
+    2071  08BD 69                 MOV  L,C        ;MOVE DIGIT COUNT TO EXP
+    2072  08BE 2D                 DCR  L          ;BACK UP TO DIGIT COUNT
+    2073  08BF 2D                 DCR  L          
+    2074  08C0 46                 MOV  B,M        ;GOT DIGIT COUNT
+    2075  08C1 CD F9 07           CALL GETEX      ;SET L TO DEC. EXP
+    2076  08C4 70                 MOV  M,B        ;PUT EXP
+    2077  08C5 7B                 MOV  A,E        ;TERM BACK TO A
+    2078  08C6 C3 64 08           JMP  TSTEX      ;TEST FOR E+OR-XX
+    2079  08C9 CD 43 09   INEXP:  CALL FLTSGN     ;FLOAT AND SIGN NUMBER
+    2080  08CC CD 47 09           CALL SAVEN      ;SAVE NUMBER IN (L) TEMP
+    2081  08CF CD 5D 09           CALL ZROIT      ;ZERO OUT NUM. FOR INPUTTING EXP
+    2082  08D2 CD FA 08           CALL GNUM       ;NOW INPUT EXPONENT
+    2083  08D5 FE F0              CPI  360Q       ;TEST FOR SPACE TERM.
+    2084  08D7 C2 00 00           JNZ  ERRLN3     ;NOT LEGAL - TRY AGAIN
+    2085  08DA 69                 MOV  L,C        ;GET EXP OUT OF MEM
+    2086  08DB 2C                 INR  L          ;/***TP
+    2087  08DC 2C                 INR  L          ;EXP LIMITED TO 5 BITS
+    2088  08DD 7E                 MOV  A,M        ;GET LOWEST 8 BITS
+    2089  08DE E6 1F              ANI  37Q        ;GET GOOD BITS
+    2090  08E0 47                 MOV  B,A        ;SAVE THEM
+    2091  08E1 2C                 INR  L          ;GET SIGN OF EXP
+    2092  08E2 7E                 MOV  A,M        ;INTO A
+    2093  08E3 B7                 ORA  A          ;SET FLOPS
+    2094  08E4 78                 MOV  A,B        ;INCASE NOTHING TO DO
+    2095  08E5 FA EB 08           JM   USEIT      ;IF NEG. USE AS +
+    2096  08E8 3E 00              MVI  A,0Q       ;IF + MAKE -
+    2097  08EA 90                 SUB  B          ;0-X = -X
+    2098  08EB 2C         USEIT:  INR  L          ;POINT AT EXP
+    2099  08EC 86                 ADD  M          ;GET REAL DEC. EXP
+    2100  08ED 77                 MOV  M,A        ;PUT IN MEM
+    2101  08EE 79                 MOV  A,C        ;NOW GET NUMBER BACK
+    2102  08EF C6 0D              ADI  15Q        ;GET ADD OF L
+    2103  08F1 6F                 MOV  L,A        ;L POINTS TO L OF NUMBER
+    2104  08F2 6E                 MOV  L,M        ;NOW L POINTS TO NUMBER
+    2105  08F3 7C                 MOV  A,H        ;RAM TO RAM COPY
+    2106  08F4 CD 3A 08           CALL COPY       ;COPY IT BACK
+    2107  08F7 C3 71 08           JMP  SCALE      ;NOW ADJUST FOR EXP
+    2108                  
+    2109  08FA CD A2 0E   GNUM:   CALL INP        ;GET A CHAR
+    2110  08FD FE 20              CPI  040Q       ;IGNORE LEADING SPACES
+    2111  08FF CA FA 08           JZ   GNUM       
+    2112  0902 FE 2D              CPI  055Q       ;TEST FOR -
+    2113  0904 C2 10 09           JNZ  TRYP       ;NOT MINUS
+    2114  0907 69                 MOV  L,C        ;MINUS SO SET SIGN
+    2115  0908 2C                 INR  L          ;IN CHAR LOC.
+    2116  0909 2C                 INR  L          ;/***TP
+    2117  090A 2C                 INR  L          
+    2118  090B 36 80              MVI  M,200Q     ;SET - SIGN
+    2119  090D C3 FA 08           JMP  GNUM       
+    2120  0910 FE 2B      TRYP:   CPI  053Q       ;IGNORE +
+    2121  0912 CA FA 08           JZ   GNUM       
+    2122  0915 D6 30      TSTN:   SUI  060Q       ;STRIP ASCII
+    2123  0917 F8                 RM              ;RETURN IF TERM
+    2124  0918 FE 0A              CPI  12Q        ;TEST FOR NUMBER
+    2125  091A F0                 RP              ;ILLEGAL
+    2126  091B 5F                 MOV  E,A        ;SAVE DIGIT
+    2127  091C CD 57 09           CALL GETN       ;LOC. OF DIGIT STORAGE TO L
+    2128  091F 73                 MOV  M,E        ;SAVE DIGIT
+    2129  0920 CD 89 07           CALL MULTT      ;MULT NUMBER BY 10
+    2130  0923 B7                 ORA  A          ;TEST FOR TOO MANY DIGITS
+    2131  0924 C0                 RNZ             ;TOO MANY DIGITS
+    2132  0925 CD 57 09           CALL GETN       ;GET DIGIT
+    2133  0928 69                 MOV  L,C        ;SET L TO NUMBER
+    2134  0929 2C                 INR  L          
+    2135  092A 2C                 INR  L          ;/***TP
+    2136  092B 86                 ADD  M          ;ADD IN THE DIGIT
+    2137  092C 77                 MOV  M,A        ;PUT RESULT BACK
+    2138  092D 2D                 DCR  L          ;NOW DO HIGH
+    2139  092E 7E                 MOV  A,M        ;GET HIGH TO ADD IN CARRY
+    2140  092F CE 00              ACI  0Q         ;ADD IN CARRY
+    2141  0931 77                 MOV  M,A        ;UPDATE HIGH
+    2142  0932 2D                 DCR  L          ;/***TP EXTENSION
+    2143  0933 7E                 MOV  A,M        
+    2144  0934 CE 00              ACI  0Q         ;ADD IN CARRY
+    2145  0936 77                 MOV  M,A        ;/***TP ALL DONE
+    2146  0937 D8                 RC              ;OVERFLOW ERROR
+    2147  0938 2D                 DCR  L          ;BUMP DIGIT COUNT NOW
+    2148  0939 2D                 DCR  L          
+    2149  093A 46                 MOV  B,M        ;GET DIGIT COUNT
+    2150  093B 04                 INR  B          ;BUMP DIGIT COUNT
+    2151  093C 70                 MOV  M,B        ;UPDATE DIGIT COUNT
+    2152  093D CD A2 0E   EP1:    CALL INP        ;GET NEXT CHAR
+    2153  0940 C3 15 09           JMP  TSTN       ;MUST BE NUM. OR TERM
+    2154  0943 69         FLTSGN: MOV  L,C        ;POINT L AT NUMBER TO FLOAT
+    2155  0944 C3 59 04           JMP  FLOAT      ;GO FLOAT IT
+    2156  0947 79         SAVEN:  MOV  A,C        ;PUT NUMBER IN (L)
+    2157  0948 C6 0D              ADI  15Q        ;GET ADD OF L
+    2158  094A 6F                 MOV  L,A        
+    2159  094B 5E                 MOV  E,M        ;GET L OF RESULT
+    2160  094C 6B                 MOV  L,E        ;POINT L AT (L)
+    2161  094D 2C                 INR  L          ;SET TO 2ND WORD TO SAVE C
+    2162  094E 71                 MOV  M,C        ;SAVE C IN (L) +1 SINCE IT WILL BE DESTROYED
+    2163  094F 69                 MOV  L,C        ;SET UP TO CALL COPY
+    2164  0950 4B                 MOV  C,E        ;NOW L&C SET
+    2165  0951 7C                 MOV  A,H        ;RAM TO RAM COPY
+    2166  0952 CD 3A 08           CALL COPY       ;COPY TO L
+    2167  0955 4F                 MOV  C,A        ;(L)+1 RETURNED HERE SO SET AS C
+    2168  0956 C9                 RET             
+    2169  0957 79         GETN:   MOV  A,C        ;GET DIGIT
+    2170  0958 C6 0E              ADI  16Q        ;LAST LOC. IN SCRATCH
+    2171  095A 6F                 MOV  L,A        ;PUT IN L
+    2172  095B 7E                 MOV  A,M        ;GET DIGIT
+    2173  095C C9                 RET             
+    2174  095D 69         ZROIT:  MOV  L,C        ;ZERO NUMBER
+    2175  095E AF                 XRA  A          
+    2176  095F 77                 MOV  M,A        ;/***TP
+    2177  0960 2C                 INR  L          ;/***TP
+    2178  0961 77                 MOV  M,A        
+    2179  0962 2C                 INR  L          
+    2180  0963 77                 MOV  M,A        
+    2181  0964 2C                 INR  L          ;NOW SET SIGN TO +
+    2182  0965 77                 MOV  M,A        
+    2183  0966 C9                 RET             ;DONE
+    2184                  
+    2185                  
+    2186                  ;**********************************************************************
+    2187                  ;(FPOP2) Floating point cosine, COS(X) 
+    2188                  ;Uses COS(X)=SIN(PI/2-X).  Returns FPRES
+    2189  0967 21 C2 0C   DCOS:   LXI  H, SINC8   
+    2190  096A 11 06 00           LXI  D, FPRES   
+    2191  096D CD 4C 0F           CALL LCMPM      ;FPRES = PI/2
+    2192  0970 21 0E 00           LXI  H, FPOP2   
+    2193  0973 0E 0A              MVI  C, FPOP1   
+    2194  0975 CD 67 0E           CALL DSINM      ;FPOP1 = X
+    2195  0978 2E 06              MVI  L, FPRES   
+    2196  097A 06 0A              MVI  B, FPOP1   
+    2197  097C 0E 26              MVI  C, FPSCR   
+    2198  097E CD E4 02           CALL LSUB       ;FPRES = PI/2 - X
+    2199  0981 2E 06              MVI  L, FPRES   
+    2200  0983 0E 0E              MVI  C, FPOP2   
+    2201  0985 CD 67 0E           CALL DSINM      
+    2202  0988 CD C6 0C           CALL DSIN       
+    2203  098B C9                 RET             
+    2204                  
+    2205                  
+    2206                  ;**********************************************************************
+    2207                  ;(FPOP2) Floating point exponentiation, EXP(X) 
+    2208                  ;Calculates e to the power of X.  Returns FPRES.
+    2209  098C 80 00 00   DEXPC1: DB   80H, 0, 0, 1;CONSTANT 1.0
+          098F 01      
+    2210  0990 AD F8 51   DEXPC2: DB   0ADH, 0F8H, 51H, 02H;CONSTANT e = 2.7182818
+          0993 02      
+    2211  0994 AB 99 99   DEXPC3: DB   0ABH, 99H, 99H, 06H;CONSTANT 42.9
+          0997 06      
+    2212  0998 80 00 00   DEXPC4: DB   80H, 0, 0, 4;CONSTANT 8.0
+          099B 04      
+    2213  099C 80 00 00   DEXPC5: DB   80H, 0, 0, 81H;CONSTANT -1.0
+          099F 81      
+    2214                  
+    2215  09A0 21 0E 00   DEXP:   LXI  H, FPOP2   ;Copy X to FPOP5
+    2216  09A3 0E 1A              MVI  C, FPOP5   
+    2217  09A5 CD 67 0E           CALL DSINM      
+    2218  09A8 97                 SUB  A          
+    2219  09A9 32 3C 00           STA  EXPS       ;Init sign flag=0 (positive)
+    2220  09AC 21 9C 09           LXI  H, DEXPC5  ;Copy -1.0 to FPOP3
+    2221  09AF 11 12 00           LXI  D, FPOP3   
+    2222  09B2 CD 4C 0F           CALL LCMPM      ;(HL, DE)
+    2223  09B5 21 12 00           LXI  H, FPOP3   ;Is X <= -1.0?
+    2224  09B8 06 0E              MVI  B, FPOP2   
+    2225  09BA CD 0A 0F           CALL LCMP       ;(HL, B)
+    2226  09BD DA D4 09           JC   DEXPP      ;  no
+    2227  09C0 3E 01              MVI  A, 1       ;  yes, sign flag=1 (negative)
+    2228  09C2 32 3C 00           STA  EXPS       
+    2229  09C5 21 0E 00           LXI  H, FPOP2   ;X = ABS(X)
+    2230  09C8 0E 1A              MVI  C, FPOP5   
+    2231  09CA CD F5 0E           CALL LABS       
+    2232  09CD 2E 1A              MVI  L, FPOP5   
+    2233  09CF 0E 0E              MVI  C, FPOP2   
+    2234  09D1 CD 67 0E           CALL DSINM      
+    2235  09D4 21 94 09   DEXPP:  LXI  H, DEXPC3  ;Copy 42.9 to FPOP3
+    2236  09D7 11 12 00           LXI  D, FPOP3   
+    2237  09DA CD 4C 0F           CALL LCMPM      
+    2238  09DD 21 0E 00           LXI  H, FPOP2   ;Is X < 42.9?
+    2239  09E0 06 12              MVI  B, FPOP3   
+    2240  09E2 CD 0A 0F           CALL LCMP       
+    2241  09E5 D2 00 00           JNC  ERRLN7     ;  no, then Overflow Error
+    2242  09E8 21 8C 09           LXI  H, DEXPC1  ;Copy 1.0 to FPOP3
+    2243  09EB 11 12 00           LXI  D, FPOP3   
+    2244  09EE CD 4C 0F           CALL LCMPM      
+    2245  09F1 21 0E 00           LXI  H, FPOP2   ;Is X < 1.0?
+    2246  09F4 06 12              MVI  B, FPOP3   
+    2247  09F6 CD 0A 0F           CALL LCMP       
+    2248  09F9 D2 6F 0A           JNC  DEXPB      ;  no, then jump to method B
+    2249  09FC CD 00 0A           CALL DEXPA      ;  yes, then use method A
+    2250  09FF C9                 RET             
+    2251                  
+    2252                  ;Method A for X<1, use Taylor series
+    2253  0A00 21 98 09   DEXPA:  LXI  H, DEXPC4  ;Copy 8. to FPOP3 (D)
+    2254  0A03 11 12 00           LXI  D, FPOP3   
+    2255  0A06 CD 4C 0F           CALL LCMPM      ;Move @HL-> @DE
+    2256  0A09 21 8C 09           LXI  H, DEXPC1  ;Copy 1. to FPOP4 (Answer)
+    2257  0A0C 11 16 00           LXI  D, FPOP4   
+    2258  0A0F CD 4C 0F           CALL LCMPM      
+    2259  0A12 21 1A 00   DEXPA1: LXI  H, FPOP5   ;Copy X to FPOP1
+    2260  0A15 0E 0A              MVI  C, FPOP1   
+    2261  0A17 CD 67 0E           CALL DSINM      ;Move @HL-> @C (same page)
+    2262  0A1A 2E 0A              MVI  L, FPOP1   ;FPRES = X/D
+    2263  0A1C 06 12              MVI  B, FPOP3   
+    2264  0A1E 0E 06              MVI  C, FPRES   
+    2265  0A20 CD 84 02           CALL LDIV       ;(FPOP1 trashed)
+    2266  0A23 2E 06              MVI  L, FPRES   ;Copy FPRES to FPOP1
+    2267  0A25 0E 0A              MVI  C, FPOP1   
+    2268  0A27 CD 67 0E           CALL DSINM      
+    2269  0A2A 2E 0A              MVI  L, FPOP1   
+    2270  0A2C 06 16              MVI  B, FPOP4   ;FPRES = X/D*Answer
+    2271  0A2E 0E 06              MVI  C, FPRES   
+    2272  0A30 CD E3 03           CALL LMUL       ;(FPOP1 trashed)
+    2273  0A33 21 8C 09           LXI  H, DEXPC1  ;FPRES = X/D*Answer+1.
+    2274  0A36 11 0A 00           LXI  D, FPOP1   
+    2275  0A39 CD 4C 0F           CALL LCMPM      
+    2276  0A3C 21 06 00           LXI  H, FPRES   
+    2277  0A3F 06 0A              MVI  B, FPOP1   
+    2278  0A41 0E 26              MVI  C, FPSCR   
+    2279  0A43 CD E0 02           CALL LADD       
+    2280  0A46 2E 06              MVI  L, FPRES   ;FPOP4 (Answer) = FPRES
+    2281  0A48 0E 16              MVI  C, FPOP4   
+    2282  0A4A CD 67 0E           CALL DSINM      
+    2283  0A4D 21 8C 09           LXI  H, DEXPC1  ;D = D -1.
+    2284  0A50 11 0E 00           LXI  D, FPOP2   
+    2285  0A53 CD 4C 0F           CALL LCMPM      
+    2286  0A56 21 12 00           LXI  H, FPOP3   
+    2287  0A59 06 0E              MVI  B, FPOP2   
+    2288  0A5B 0E 26              MVI  C, FPSCR   
+    2289  0A5D CD E4 02           CALL LSUB       
+    2290  0A60 3A 12 00           LDA  FPOP3      ;Is D = 0.?
+    2291  0A63 B7                 ORA  A          
+    2292  0A64 C2 12 0A           JNZ  DEXPA1     ;  no, then loop
+    2293  0A67 2E 16              MVI  L, FPOP4   ;FPRES = FPOP4 (Answer)
+    2294  0A69 0E 06              MVI  C, FPRES   
+    2295  0A6B CD 67 0E           CALL DSINM      
+    2296  0A6E C9                 RET             
+    2297                  
+    2298                  ;Method B for X>=1
+    2299  0A6F 2E 1A      DEXPB:  MVI  L, FPOP5   ;Copy X to FPRES
+    2300  0A71 0E 06              MVI  C, FPRES   
+    2301  0A73 CD 67 0E           CALL DSINM      
+    2302  0A76 21 06 00           LXI  H, FPRES   ;Ptr to X
+    2303  0A79 CD 87 0F           CALL LINT       ;HL = INT(X)
+    2304  0A7C 7D                 MOV  A, L       
+    2305  0A7D 32 3B 00           STA  EXPI       ;EXPI = Low(INT(X))
+    2306  0A80 01 0E 00           LXI  B, FPOP2   
+    2307  0A83 CD 5D 0F           CALL LFLOAT     ;FPOP2=FLOAT(INT(X))
+    2308  0A86 2E 1A              MVI  L, FPOP5   
+    2309  0A88 06 0E              MVI  B, FPOP2   
+    2310  0A8A 0E 26              MVI  C, FPSCR   
+    2311  0A8C CD E4 02           CALL LSUB       ;X = X-FLOAT(INT(X))
+    2312  0A8F CD 00 0A           CALL DEXPA      ;FPRES = EXP(X)
+    2313  0A92 2E 06              MVI  L, FPRES   
+    2314  0A94 0E 12              MVI  C, FPOP3   
+    2315  0A96 CD 67 0E           CALL DSINM      ;Copy to FPOP3
+    2316  0A99 21 90 09           LXI  H, DEXPC2  
+    2317  0A9C 11 0E 00           LXI  D, FPOP2   
+    2318  0A9F CD 4C 0F           CALL LCMPM      ;FPOP2 (Accumulator) = e
+    2319  0AA2 3A 3B 00   DEXPB1: LDA  EXPI       ;Calc e^EXPI
+    2320  0AA5 3D                 DCR  A          
+    2321  0AA6 32 3B 00           STA  EXPI       
+    2322  0AA9 CA C9 0A           JZ   DEXPB2     
+    2323  0AAC 21 90 09           LXI  H, DEXPC2  ;FPOP1 = e
+    2324  0AAF 11 0A 00           LXI  D, FPOP1   
+    2325  0AB2 CD 4C 0F           CALL LCMPM      
+    2326  0AB5 21 0A 00           LXI  H, FPOP1   
+    2327  0AB8 06 0E              MVI  B, FPOP2   
+    2328  0ABA 0E 06              MVI  C, FPRES   
+    2329  0ABC CD E3 03           CALL LMUL       ;FPRES = e * FPOP2
+    2330  0ABF 2E 06              MVI  L, FPRES   
+    2331  0AC1 0E 0E              MVI  C, FPOP2   
+    2332  0AC3 CD 67 0E           CALL DSINM      
+    2333  0AC6 C3 A2 0A           JMP  DEXPB1     
+    2334  0AC9 21 0E 00   DEXPB2: LXI  H, FPOP2   ;Answer = FPOP3*e^EXPI
+    2335  0ACC 06 12              MVI  B, FPOP3   
+    2336  0ACE 0E 06              MVI  C, FPRES   
+    2337  0AD0 CD E3 03           CALL LMUL       
+    2338  0AD3 3A 3C 00           LDA  EXPS       ;Sign flag=0 (positive)?
+    2339  0AD6 B7                 ORA  A          
+    2340  0AD7 C8                 RZ              ;  yes, then done
+    2341  0AD8 2E 06              MVI  L, FPRES   ;Copy FPRES to FPOP1
+    2342  0ADA 0E 0A              MVI  C, FPOP1   
+    2343  0ADC CD 67 0E           CALL DSINM      
+    2344  0ADF 21 8C 09           LXI  H, DEXPC1  ;Move 1.0 to FPOP2
+    2345  0AE2 11 0E 00           LXI  D, FPOP2   
+    2346  0AE5 CD 4C 0F           CALL LCMPM      
+    2347  0AE8 21 0E 00           LXI  H, FPOP2   ;FPRES = 1.0/FPRES
+    2348  0AEB 06 0A              MVI  B, FPOP1   
+    2349  0AED 0E 06              MVI  C, FPRES   
+    2350  0AEF CD 84 02           CALL LDIV       
+    2351  0AF2 C9                 RET             
+    2352                  
+    2353                  
+    2354                  ;**********************************************************************
+    2355                  ;(FPOP2) Floating natural logarithm, LOG(X),  Result in FPRES
+    2356                  
+    2357  0AF3 00 00 00   DLOGC0: DB   0, 0, 0, 40H;CONSTANT 0.0
+          0AF6 40      
+    2358  0AF7 80 00 00   DLOGC2: DB   80H, 0, 0, 2;CONSTANT 2.0
+          0AFA 02      
+    2359  0AFB CC CC CC   DLOGC3: DB   0CCH, 0CCH, 0CCH, 7EH;CONSTANT 0.2
+          0AFE 7E      
+    2360  0AFF E6 66 66   DLOGC4: DB   0E6H, 66H, 66H, 1;CONSTANT 1.8
+          0B02 01      
+    2361  0B03 86 37 BC   DLOGC5: DB   86H, 37H, 0BCH, 6DH;CONSTANT 0.000001
+          0B06 6D      
+    2362                  
+    2363  0B07 21 F3 0A   DLOG:   LXI  H, DLOGC0  ;MOVE 0.0 TO FPOP1
+    2364  0B0A 11 0A 00           LXI  D, FPOP1   
+    2365  0B0D CD 4C 0F           CALL LCMPM      ;(HL, DE)
+    2366  0B10 21 0A 00           LXI  H, FPOP1   ;IS X <=0.0?
+    2367  0B13 06 0E              MVI  B, FPOP2   
+    2368  0B15 CD 0A 0F           CALL LCMP       ;  (HL, B)
+    2369  0B18 D2 00 00           JNC  ERRLN7     ;YES - OVERFLOW ERROR
+    2370  0B1B 21 FF 0A           LXI  H, DLOGC4  ;MOVE 1.8 TO FPOP1
+    2371  0B1E 11 0A 00           LXI  D, FPOP1   
+    2372  0B21 CD 4C 0F           CALL LCMPM      
+    2373  0B24 21 FB 0A           LXI  H, DLOGC3  ;MOVE 0.2 TO FPOP3
+    2374  0B27 11 12 00           LXI  D, FPOP3   
+    2375  0B2A CD 4C 0F           CALL LCMPM      
+    2376  0B2D 21 12 00           LXI  H, FPOP3   ;IS X <= 0.2?
+    2377  0B30 06 0E              MVI  B, FPOP2   
+    2378  0B32 CD 0A 0F           CALL LCMP       
+    2379  0B35 D2 03 0C           JNC  DLOGB      ;  YES, THEN METHOD B
+    2380  0B38 21 0A 00           LXI  H, FPOP1   ;IS X > 1.8?
+    2381  0B3B 06 0E              MVI  B, FPOP2   
+    2382  0B3D CD 0A 0F           CALL LCMP       
+    2383  0B40 DA 03 0C           JC   DLOGB      ;  YES, THEN METHOD B
+    2384                  ;METHOD A USES TAYLOR SERIES FOR .2 < X <= 1.8
+    2385  0B43 21 9C 09   DLOGA:  LXI  H, DEXPC5  ;SIGN (FPOP5) = -1.0
+    2386  0B46 11 1A 00           LXI  D, FPOP5   
+    2387  0B49 CD 4C 0F           CALL LCMPM      
+    2388  0B4C 21 F7 0A           LXI  H, DLOGC2  ;D (FPOP6) = 2.0
+    2389  0B4F 11 1E 00           LXI  D, FPOP6   
+    2390  0B52 CD 4C 0F           CALL LCMPM      
+    2391  0B55 21 8C 09           LXI  H, DEXPC1  ;MOVE 1.0 TO FPOP1
+    2392  0B58 11 0A 00           LXI  D, FPOP1   
+    2393  0B5B CD 4C 0F           CALL LCMPM      
+    2394  0B5E 21 0E 00           LXI  H, FPOP2   ;Y (FPOP2) = X-1.0
+    2395  0B61 06 0A              MVI  B, FPOP1   
+    2396  0B63 0E 26              MVI  C, FPSCR   
+    2397  0B65 CD E4 02           CALL LSUB       
+    2398  0B68 0E 16              MVI  C, FPOP4   ;N (FPOP4) = Y
+    2399  0B6A CD 67 0E           CALL DSINM      
+    2400  0B6D 0E 12              MVI  C, FPOP3   ;SUM (FPOP3) = Y
+    2401  0B6F CD 67 0E           CALL DSINM      
+    2402  0B72 21 16 00   DLOGA1: LXI  H, FPOP4   ;N *= Y
+    2403  0B75 0E 0A              MVI  C, FPOP1   
+    2404  0B77 CD 67 0E           CALL DSINM      
+    2405  0B7A 2E 0A              MVI  L, FPOP1   
+    2406  0B7C 06 0E              MVI  B, FPOP2   
+    2407  0B7E 0E 06              MVI  C, FPRES   
+    2408  0B80 CD E3 03           CALL LMUL       
+    2409  0B83 2E 06              MVI  L, FPRES   
+    2410  0B85 0E 16              MVI  C, FPOP4   
+    2411  0B87 CD 67 0E           CALL DSINM      
+    2412  0B8A 2E 1A              MVI  L, FPOP5   ;T = SIGN*N/D
+    2413  0B8C 0E 0A              MVI  C, FPOP1   
+    2414  0B8E CD 67 0E           CALL DSINM      
+    2415  0B91 2E 0A              MVI  L, FPOP1   
+    2416  0B93 06 16              MVI  B, FPOP4   
+    2417  0B95 0E 06              MVI  C, FPRES   
+    2418  0B97 CD E3 03           CALL LMUL       
+    2419  0B9A 2E 06              MVI  L, FPRES   
+    2420  0B9C 06 1E              MVI  B, FPOP6   
+    2421  0B9E 0E 22              MVI  C, FPOP7   
+    2422  0BA0 CD 84 02           CALL LDIV       
+    2423  0BA3 2E 22              MVI  L, FPOP7   ;SUM += T
+    2424  0BA5 0E 0A              MVI  C, FPOP1   
+    2425  0BA7 CD 67 0E           CALL DSINM      
+    2426  0BAA 2E 12              MVI  L, FPOP3   
+    2427  0BAC 06 0A              MVI  B, FPOP1   
+    2428  0BAE 0E 26              MVI  C, FPSCR   
+    2429  0BB0 CD E0 02           CALL LADD       
+    2430  0BB3 21 8C 09           LXI  H, DEXPC1  ;D += 1.
+    2431  0BB6 11 0A 00           LXI  D, FPOP1   
+    2432  0BB9 CD 4C 0F           CALL LCMPM      
+    2433  0BBC 21 1E 00           LXI  H, FPOP6   
+    2434  0BBF 06 0A              MVI  B, FPOP1   
+    2435  0BC1 0E 26              MVI  C, FPSCR   
+    2436  0BC3 CD E0 02           CALL LADD       
+    2437  0BC6 21 9C 09           LXI  H, DEXPC5  ;SIGN *= -1.
+    2438  0BC9 11 0A 00           LXI  D, FPOP1   
+    2439  0BCC CD 4C 0F           CALL LCMPM      
+    2440  0BCF 21 0A 00           LXI  H, FPOP1   
+    2441  0BD2 06 1A              MVI  B, FPOP5   
+    2442  0BD4 0E 06              MVI  C, FPRES   
+    2443  0BD6 CD E3 03           CALL LMUL       
+    2444  0BD9 2E 06              MVI  L, FPRES   
+    2445  0BDB 0E 1A              MVI  C, FPOP5   
+    2446  0BDD CD 67 0E           CALL DSINM      
+    2447  0BE0 2E 22              MVI  L, FPOP7   ;FPOP1 = ABS(T)
+    2448  0BE2 0E 0A              MVI  C, FPOP1   
+    2449  0BE4 CD F5 0E           CALL LABS       
+    2450  0BE7 21 03 0B           LXI  H, DLOGC5  ;IS FPOP1 > 0.000001?
+    2451  0BEA 11 06 00           LXI  D, FPRES   
+    2452  0BED CD 4C 0F           CALL LCMPM      
+    2453  0BF0 21 0A 00           LXI  H, FPOP1   
+    2454  0BF3 06 06              MVI  B, FPRES   
+    2455  0BF5 CD 0A 0F           CALL LCMP       
+    2456  0BF8 D2 72 0B           JNC  DLOGA1     
+    2457  0BFB 2E 12              MVI  L, FPOP3   ;FPRES = SUM
+    2458  0BFD 0E 06              MVI  C, FPRES   
+    2459  0BFF CD 67 0E           CALL DSINM      
+    2460  0C02 C9                 RET             ;EXIT
+    2461                  ;METHOD B USES SQRT TO REDUCE X TO RANGE 0.2 TO 1.8
+    2462                  ;THE NUMBER, N, OF ROOTS, THEN 2^N * LOG(X) 
+    2463  0C03 97         DLOGB:  SUB  A          ;INIT COUNT OF SQRTs
+    2464  0C04 32 3A 00           STA  FPCNT      ;FPCNT = 0
+    2465  0C07 21 0E 00   DLOGB1: LXI  H, FPOP2   ;X = SQRT(X)
+    2466  0C0A 06 06              MVI  B, FPRES   
+    2467  0C0C 0E 26              MVI  C, FPSCR   
+    2468  0C0E CD 1E 06           CALL DSQRT      
+    2469  0C11 2E 06              MVI  L, FPRES   
+    2470  0C13 0E 0E              MVI  C, FPOP2   
+    2471  0C15 CD 67 0E           CALL DSINM      
+    2472  0C18 3A 3A 00           LDA  FPCNT      ;COUNT += 1
+    2473  0C1B 3C                 INR  A          
+    2474  0C1C 32 3A 00           STA  FPCNT      
+    2475  0C1F 2E 0A              MVI  L, FPOP1   ;IS X > 1.8?
+    2476  0C21 06 0E              MVI  B, FPOP2   
+    2477  0C23 CD 0A 0F           CALL LCMP       
+    2478  0C26 DA 07 0C           JC   DLOGB1     
+    2479  0C29 2E 12              MVI  L, FPOP3   ;IS X < 0.2?
+    2480  0C2B CD 0A 0F           CALL LCMP       
+    2481  0C2E D2 07 0C           JNC  DLOGB1     
+    2482  0C31 CD 43 0B           CALL DLOGA      ;FPOP2 = LOG(X)
+    2483  0C34 2E 06              MVI  L, FPRES   
+    2484  0C36 0E 0E              MVI  C, FPOP2   
+    2485  0C38 CD 67 0E           CALL DSINM      
+    2486  0C3B 3A 3A 00           LDA  FPCNT      ;A = 2^COUNT
+    2487  0C3E 4F                 MOV  C, A       
+    2488  0C3F 3E 01              MVI  A, 1       
+    2489  0C41 07         DLOGB2: RLC             
+    2490  0C42 0D                 DCR  C          
+    2491  0C43 C2 41 0C           JNZ  DLOGB2     
+    2492  0C46 6F                 MOV  L, A       ;FPOP4 = FLOAT(HL)
+    2493  0C47 26 00              MVI  H, 0       
+    2494  0C49 01 16 00           LXI  B, FPOP4   
+    2495  0C4C CD 5D 0F           CALL LFLOAT     
+    2496  0C4F 21 0E 00           LXI  H, FPOP2   ;FPRES = FPOP2*FPOP4
+    2497  0C52 06 16              MVI  B, FPOP4   
+    2498  0C54 0E 06              MVI  C, FPRES   
+    2499  0C56 CD E3 03           CALL LMUL       
+    2500  0C59 C9                 RET             
+    2501                  
+    2502                  
+    2503                  ;**********************************************************************
+    2504                  ;(FPOP1, FPOP2) Floating Exponentiation FPOP1^FPOPY, POW(X, Y) 
+    2505                  ;Result in FPRES.
+    2506  0C5A 21 F7 0A   DPOW:   LXI  H, DLOGC2  ;MOVE 2.0 TO FPRES
+    2507  0C5D 11 06 00           LXI  D, FPRES   
+    2508  0C60 CD 4C 0F           CALL LCMPM      
+    2509  0C63 21 06 00           LXI  H, FPRES   ;IS Y = 2.0?
+    2510  0C66 06 0E              MVI  B, FPOP2   
+    2511  0C68 CD 0A 0F           CALL LCMP       
+    2512  0C6B C2 7D 0C           JNZ  DPOW2      ;  no, then jump
+    2513                  ;For Y=2.0 ANSWER = X*X
+    2514  0C6E 2E 0A              MVI  L, FPOP1   
+    2515  0C70 0E 0E              MVI  C, FPOP2   
+    2516  0C72 CD 67 0E           CALL DSINM      
+    2517  0C75 06 0E              MVI  B, FPOP2   
+    2518  0C77 0E 06              MVI  C, FPRES   
+    2519  0C79 CD E3 03           CALL LMUL       
+    2520  0C7C C9                 RET             
+    2521                  ;ANSWER = EXP(Y*LOG(X))
+    2522  0C7D 2A 0E 00   DPOW2:  LHLD FPOP2      ;SAVE Y ON STACK
+    2523  0C80 E5                 PUSH H          
+    2524  0C81 2A 10 00           LHLD FPOP2+2    
+    2525  0C84 E5                 PUSH H          
+    2526  0C85 21 0A 00           LXI  H, FPOP1   ;MOVE X TO FPOP2
+    2527  0C88 0E 0E              MVI  C, FPOP2   
+    2528  0C8A CD 67 0E           CALL DSINM      
+    2529  0C8D CD 07 0B           CALL DLOG       ;FPRES = LOG(X)
+    2530  0C90 E1                 POP  H          
+    2531  0C91 22 0C 00           SHLD FPOP1+2    
+    2532  0C94 E1                 POP  H          
+    2533  0C95 22 0A 00           SHLD FPOP1      
+    2534  0C98 21 06 00           LXI  H, FPRES   ;FPOP2 = LOG(X)*Y
+    2535  0C9B 06 0A              MVI  B, FPOP1   
+    2536  0C9D 0E 0E              MVI  C, FPOP2   
+    2537  0C9F CD E3 03           CALL LMUL       
+    2538  0CA2 CD A0 09           CALL DEXP       ;FPRES = EXP(LOG(X)*Y)
+    2539  0CA5 C9                 RET             
+    2540                  
+    2541                  
+    2542                  ;**********************************************************************
+    2543                  ;(FPOP2) Floating sine, SIN(X).  Returns FPRES 
+    2544                  ;Uses telescoped series:  SINC4*X - SINC3*X^3 + SINC2*X^5 - SINC1*X^7
+    2545  0CA6 8D 95 2B   SINC1:  DB   08DH, 095H, 02BH, 079H;0.0043207614
+          0CA9 79      
+    2546  0CAA A2 A7 EF   SINC2:  DB   0A2H, 0A7H, 0EFH, 07DH;0.079421881
+          0CAD 7D      
+    2547  0CAE A5 58 F7   SINC3:  DB   0A5H, 058H, 0F7H, 000H;0.64588889
+          0CB1 00      
+    2548  0CB2 C9 0F A9   SINC4:  DB   0C9H, 00FH, 0A9H, 001H;1.5707907
+          0CB5 01      
+    2549  0CB6 A2 F9 81   SINC5:  DB   0A2H, 0F9H, 081H, 000H;0.63661977 (2/PI)
+          0CB9 00      
+    2550  0CBA 96 CB E2   SINC6:  DB   096H, 0CBH, 0E2H, 003H;4.7123890 (3/2*PI)
+          0CBD 03      
+    2551  0CBE C9 0F D8   SINC7:  DB   0C9H, 00FH, 0D8H, 003H;6.2831853 (2*PI)
+          0CC1 03      
+    2552  0CC2 C9 0F D8   SINC8:  DB   0C9H, 00FH, 0D8H, 001H;1.5707963 (PI/2)
+          0CC5 01      
+    2553                  
+    2554  0CC6 CD 48 0D   DSIN:   CALL DANG       ;ANGLE TO 0<=X<=PI/2 & SIGN
+    2555  0CC9 21 B6 0C           LXI  H, SINC5   ;MULTIPLY X * SINC5
+    2556  0CCC 11 0A 00           LXI  D, FPOP1   
+    2557  0CCF CD 4C 0F           CALL LCMPM      
+    2558  0CD2 21 0A 00           LXI  H, FPOP1   
+    2559  0CD5 06 0E              MVI  B, FPOP2   
+    2560  0CD7 0E 06              MVI  C, FPRES   
+    2561  0CD9 CD E3 03           CALL LMUL       
+    2562  0CDC 2E 06              MVI  L, FPRES   
+    2563  0CDE 0E 0E              MVI  C, FPOP2   
+    2564  0CE0 CD 67 0E           CALL DSINM      
+    2565  0CE3 21 A6 0C           LXI  H, SINC1   ;RESULT = SINC1
+    2566  0CE6 11 0A 00           LXI  D, FPOP1   
+    2567  0CE9 CD 4C 0F           CALL LCMPM      
+    2568  0CEC 26 00              MVI  H, HIGH FPOP1
+    2569  0CEE CD 1D 0D           CALL DSINXX     ;MULTIPLY RESULT *X *X
+    2570  0CF1 21 AA 0C           LXI  H, SINC2   ;SUBTRACT SINC2 - RESULT
+    2571  0CF4 CD 37 0D           CALL DSINS      
+    2572  0CF7 CD 1D 0D           CALL DSINXX     ;MULTIPLY RESULT *X *X
+    2573  0CFA 21 AE 0C           LXI  H, SINC3   ;SUBTRACT SINC3 - RESULT
+    2574  0CFD CD 37 0D           CALL DSINS      
+    2575  0D00 CD 1D 0D           CALL DSINXX     ;MULTIPLY RESULT *X *X
+    2576  0D03 21 B2 0C           LXI  H, SINC4   ;SUBTRACT SINC4 - RESULT
+    2577  0D06 CD 37 0D           CALL DSINS      
+    2578  0D09 0E 06              MVI  C, FPRES   ;MULTIPLY X * RESULT
+    2579  0D0B 2E 0A              MVI  L, FPOP1   
+    2580  0D0D 06 0E              MVI  B, FPOP2   
+    2581  0D0F CD E3 03           CALL LMUL       
+    2582  0D12 3A 3D 00           LDA  LSIGN      ;SIGN RESULT
+    2583  0D15 4F                 MOV  C, A       
+    2584  0D16 21 09 00           LXI  H, FPRES+3 
+    2585  0D19 7E                 MOV  A, M       
+    2586  0D1A B1                 ORA  C          
+    2587  0D1B 77                 MOV  M, A       
+    2588  0D1C C9                 RET             
+    2589  0D1D 2E 0A      DSINXX: MVI  L, FPOP1   ;MULTIPLY FPOP1 * X * X
+    2590  0D1F 06 0E              MVI  B, FPOP2   
+    2591  0D21 0E 06              MVI  C, FPRES   
+    2592  0D23 CD E3 03           CALL LMUL       
+    2593  0D26 2E 06              MVI  L, FPRES   
+    2594  0D28 0E 0A              MVI  C, FPOP1   
+    2595  0D2A CD 67 0E           CALL DSINM      
+    2596  0D2D 2E 0A              MVI  L, FPOP1   
+    2597  0D2F 06 0E              MVI  B, FPOP2   
+    2598  0D31 0E 06              MVI  C, FPRES   
+    2599  0D33 CD E3 03           CALL LMUL       
+    2600  0D36 C9                 RET             
+    2601  0D37 11 0A 00   DSINS:  LXI  D, FPOP1   ;SUBTRACT TWO FLOATS
+    2602  0D3A CD 4C 0F           CALL LCMPM      
+    2603  0D3D 21 0A 00           LXI  H, FPOP1   
+    2604  0D40 06 06              MVI  B, FPRES   
+    2605  0D42 0E 26              MVI  C, FPSCR   
+    2606  0D44 CD E4 02           CALL LSUB       
+    2607  0D47 C9                 RET             
+    2608                  
+    2609                  ;CONVERT FPOP2 ANGLE TO RANGE 0<=X<=PI/2 + LSIGN
+    2610  0D48 21 11 00   DANG:   LXI  H, FPOP2+3 
+    2611  0D4B 7E                 MOV  A, M       ;LSIGN = SIGN OF ANGLE
+    2612  0D4C E6 80              ANI  80H        
+    2613  0D4E 32 3D 00           STA  LSIGN      
+    2614  0D51 7E                 MOV  A, M       ;ANGLE = ABS(ANGLE)
+    2615  0D52 E6 7F              ANI  7FH        
+    2616  0D54 77                 MOV  M, A       
+    2617  0D55 21 BE 0C           LXI  H, SINC7   ;IS ANGLE > 2*PI?
+    2618  0D58 11 0A 00           LXI  D, FPOP1   
+    2619  0D5B CD 4C 0F           CALL LCMPM      ;  FPOP1 = 2*PI
+    2620  0D5E 21 0A 00           LXI  H, FPOP1   
+    2621  0D61 06 0E              MVI  B, FPOP2   
+    2622  0D63 CD 0A 0F           CALL LCMP       ;  Compare
+    2623  0D66 D2 9B 0D           JNC  DANG1      
+    2624                  ;Reduce angle till < 2*PI
+    2625  0D69 21 0E 00           LXI  H, FPOP2   ;FPOP3 = COPY OF ANGLE
+    2626  0D6C 0E 12              MVI  C, FPOP3   
+    2627  0D6E CD 67 0E           CALL DSINM      
+    2628  0D71 21 12 00           LXI  H, FPOP3   
+    2629  0D74 06 0A              MVI  B, FPOP1   ;(FPOP1 = 2*PI)
+    2630  0D76 0E 06              MVI  C, FPRES   
+    2631  0D78 CD 84 02           CALL LDIV       ;FPRES = ANGLE/(2*PI)
+    2632  0D7B 21 06 00           LXI  H, FPRES   ;FPOP3 = INT(FPRES)
+    2633  0D7E CD 87 0F           CALL LINT       
+    2634  0D81 01 12 00           LXI  B, FPOP3   
+    2635  0D84 CD 5D 0F           CALL LFLOAT     
+    2636  0D87 21 12 00           LXI  H, FPOP3   ;FPRES = FPOP3 * 2*PI
+    2637  0D8A 06 0A              MVI  B, FPOP1   
+    2638  0D8C 0E 06              MVI  C, FPRES   
+    2639  0D8E CD E3 03           CALL LMUL       
+    2640  0D91 21 0E 00           LXI  H, FPOP2   ;ANGLE = ANGLE - FPRES
+    2641  0D94 06 06              MVI  B, FPRES   
+    2642  0D96 0E 26              MVI  C, FPSCR   
+    2643  0D98 CD E4 02           CALL LSUB       
+    2644                  
+    2645  0D9B 21 C2 0C   DANG1:  LXI  H, SINC8   ;IS ANGLE < PI/2? (1st quadrant)
+    2646  0D9E 11 06 00           LXI  D, FPRES   
+    2647  0DA1 CD 4C 0F           CALL LCMPM      ;  FPRES = 2*PI
+    2648  0DA4 21 0E 00           LXI  H, FPOP2   
+    2649  0DA7 0E 0A              MVI  C, FPOP1   
+    2650  0DA9 CD 67 0E           CALL DSINM      ;  FPOP1 = ANGLE
+    2651  0DAC 21 06 00           LXI  H, FPRES   
+    2652  0DAF 06 0A              MVI  B, FPOP1   
+    2653  0DB1 0E 26              MVI  C, FPSCR   
+    2654  0DB3 CD E4 02           CALL LSUB       ;  FPRES = PI/2 - ANGLE
+    2655  0DB6 3A 09 00           LDA  FPRES+3    
+    2656  0DB9 E6 80              ANI  80H        ;  positive?
+    2657  0DBB C8                 RZ              ;  yes, then done.
+    2658                  
+    2659  0DBC 21 BE 0C   DANG2:  LXI  H, SINC7   ;ELSE IS ANGLE < PI? (2nd quadrant)
+    2660  0DBF 11 06 00           LXI  D, FPRES   ;  FPRES = 2*PI
+    2661  0DC2 CD 4C 0F           CALL LCMPM      
+    2662  0DC5 3E 02              MVI  A, 2       
+    2663  0DC7 32 09 00           STA  FPRES+3    ;  FPRES = PI
+    2664  0DCA 21 0E 00           LXI  H, FPOP2   
+    2665  0DCD 0E 0A              MVI  C, FPOP1   
+    2666  0DCF CD 67 0E           CALL DSINM      ;  FPOP1 = ANGLE
+    2667  0DD2 21 06 00           LXI  H, FPRES   
+    2668  0DD5 06 0A              MVI  B, FPOP1   
+    2669  0DD7 0E 26              MVI  C, FPSCR   
+    2670  0DD9 CD E4 02           CALL LSUB       ;  FPRES = PI - ANGLE
+    2671  0DDC 3A 09 00           LDA  FPRES+3    
+    2672  0DDF E6 80              ANI  80H        ;  negative?
+    2673  0DE1 C2 ED 0D           JNZ  DANG3      ;  yes, then jump
+    2674  0DE4 21 06 00           LXI  H, FPRES   ;ANGLE = PI - ANGLE
+    2675  0DE7 0E 0E              MVI  C, FPOP2   
+    2676  0DE9 CD 67 0E           CALL DSINM      
+    2677  0DEC C9                 RET             
+    2678                  
+    2679  0DED 21 BA 0C   DANG3:  LXI  H, SINC6   ;ELSE IS ANGLE < 3*PI/2? (3rd quadrant)
+    2680  0DF0 11 06 00           LXI  D, FPRES   
+    2681  0DF3 CD 4C 0F           CALL LCMPM      ;  FPRES = 3*PI/2
+    2682  0DF6 21 0E 00           LXI  H, FPOP2   
+    2683  0DF9 0E 0A              MVI  C, FPOP1   
+    2684  0DFB CD 67 0E           CALL DSINM      ;  FPOP1 = ANGLE
+    2685  0DFE 21 0A 00           LXI  H, FPOP1   
+    2686  0E01 06 06              MVI  B, FPRES   
+    2687  0E03 0E 26              MVI  C, FPSCR   
+    2688  0E05 CD E4 02           CALL LSUB       ;  FPOP1 = ANGLE - 3*PI/2
+    2689  0E08 3A 0D 00           LDA  FPOP1+3    
+    2690  0E0B E6 80              ANI  80H        ;  positive?
+    2691  0E0D CA 3B 0E           JZ   DANG4      ;  yes, then jump
+    2692  0E10 21 BE 0C           LXI  H, SINC7   ;ANGLE = ABS(ANGLE - 3*PI/2)
+    2693  0E13 11 06 00           LXI  D, FPRES   
+    2694  0E16 CD 4C 0F           CALL LCMPM      ;  FPRES = 2*PI
+    2695  0E19 3E 02              MVI  A, 2       
+    2696  0E1B 32 09 00           STA  FPRES+3    ;  FPRES = PI
+    2697  0E1E 21 0E 00           LXI  H, FPOP2   
+    2698  0E21 0E 0A              MVI  C, FPOP1   
+    2699  0E23 CD 67 0E           CALL DSINM      ;  FPOP1 = ANGLE
+    2700  0E26 21 06 00           LXI  H, FPRES   
+    2701  0E29 06 0A              MVI  B, FPOP1   
+    2702  0E2B 0E 26              MVI  C, FPSCR   
+    2703  0E2D CD E4 02           CALL LSUB       ;  FPRES = PI/2 - ANGLE
+    2704  0E30 21 06 00           LXI  H, FPRES   
+    2705  0E33 0E 0E              MVI  C, FPOP2   
+    2706  0E35 CD F5 0E           CALL LABS       ;  FPOP2 = ABS(FPRES)
+    2707  0E38 C3 5E 0E           JMP  DANGS      
+    2708                  
+    2709  0E3B 21 BE 0C   DANG4:  LXI  H, SINC7   ;ELSE ANGLE = 2*PI - ANGLE (4th quadrant)
+    2710  0E3E 11 06 00           LXI  D, FPRES   
+    2711  0E41 CD 4C 0F           CALL LCMPM      ;  FPRES = 2*PI
+    2712  0E44 21 0E 00           LXI  H, FPOP2   
+    2713  0E47 0E 0A              MVI  C, FPOP1   
+    2714  0E49 CD 67 0E           CALL DSINM      ;  FPOP1 = ANGLE
+    2715  0E4C 21 06 00           LXI  H, FPRES   
+    2716  0E4F 06 0A              MVI  B, FPOP1   
+    2717  0E51 0E 26              MVI  C, FPSCR   
+    2718  0E53 CD E4 02           CALL LSUB       ;  FPRES = PI - ANGLE
+    2719  0E56 21 06 00           LXI  H, FPRES   
+    2720  0E59 0E 0E              MVI  C, FPOP2   
+    2721  0E5B CD 67 0E           CALL DSINM      
+    2722  0E5E 3A 3D 00   DANGS:  LDA  LSIGN      ;SIGN = -SIGN
+    2723  0E61 EE 80              XRI  80H        
+    2724  0E63 32 3D 00           STA  LSIGN      
+    2725  0E66 C9                 RET             
+    2726                  
+    2727                  ; Move a copy of float (4 bytes) from @HL to @C in same page
+    2728  0E67 E5         DSINM:  PUSH H          
+    2729  0E68 44                 MOV  B, H       
+    2730  0E69 16 04              MVI  D, 4       
+    2731  0E6B 7E         DSINML: MOV  A, M       
+    2732  0E6C 02                 STAX B          
+    2733  0E6D 2C                 INR  L          
+    2734  0E6E 0C                 INR  C          
+    2735  0E6F 15                 DCR  D          
+    2736  0E70 C2 6B 0E           JNZ  DSINML     
+    2737  0E73 E1                 POP  H          
+    2738  0E74 C9                 RET             
+    2739                  
+    2740                  
+    2741                  ;**********************************************************************
+    2742                  ;(FPOP2) Floating tangent, TAN(X).  Returns FPRES 
+    2743                  ;Calculates using TAN(X)=SIN(X)/COS(X)
+    2744  0E75 21 0E 00   DTAN:   LXI  H, FPOP2   ;Copy X to FPOP3
+    2745  0E78 0E 12              MVI  C, FPOP3   
+    2746  0E7A CD 67 0E           CALL DSINM      
+    2747  0E7D CD C6 0C           CALL DSIN       ;FPRES = SIN(X)
+    2748  0E80 2E 06              MVI  L, FPRES   ;Copy SINX(X) to FPOP4
+    2749  0E82 0E 16              MVI  C, FPOP4   
+    2750  0E84 CD 67 0E           CALL DSINM      
+    2751  0E87 2E 12              MVI  L, FPOP3   ;Copy X to FPOP2
+    2752  0E89 0E 0E              MVI  C, FPOP2   
+    2753  0E8B CD 67 0E           CALL DSINM      
+    2754  0E8E CD 67 09           CALL DCOS       ;FPRES = COX(X)
+    2755  0E91 2E 06              MVI  L, FPRES   ;Copy COS(X) to FPOP2
+    2756  0E93 0E 0E              MVI  C, FPOP2   
+    2757  0E95 CD 67 0E           CALL DSINM      
+    2758  0E98 2E 16              MVI  L, FPOP4   
+    2759  0E9A 06 0E              MVI  B, FPOP2   
+    2760  0E9C 0E 06              MVI  C, FPRES   
+    2761  0E9E CD 84 02           CALL LDIV       ;FPRES = SINX(X)/COS(X)
+    2762  0EA1 C9                 RET             
+    2763                  
+    2764                  
+    2765                  ;**********************************************************************
+    2766                  ;Get an ASCII float number.  INPUT expects a ' ' to terminate the string.
+    2767                  ;If an invalid float char is detected, return ' '. Uses FPPR, FPFLG
+    2768  0EA2 E5         INP:    PUSH H          
+    2769  0EA3 2A 37 00           LHLD FPPTR      ;HL=POINTER TO INPUT STREAM
+    2770  0EA6 3A 39 00           LDA  FPFLG      ;GET PROGRESS FLAG
+    2771  0EA9 B7                 ORA  A          ;FLAG=0?
+    2772  0EAA C2 B4 0E           JNZ  INP1       ;  YES, THEN CHAR ACCEPTED
+    2773  0EAD 3C                 INR  A          ;SET FLAG=1
+    2774  0EAE 32 39 00           STA  FPFLG      
+    2775  0EB1 C3 EE 0E           JMP  INPOK      
+    2776  0EB4 7E         INP1:   MOV  A, M       ;GET NEXT CHAR
+    2777  0EB5 FE 45              CPI  'E'        ;'E'?
+    2778  0EB7 C2 C2 0E           JNZ  INP2       
+    2779  0EBA 3E 02              MVI  A, 2       ;SET FLAG=2
+    2780  0EBC 32 39 00           STA  FPFLG      
+    2781  0EBF C3 EE 0E           JMP  INPOK      
+    2782  0EC2 3A 39 00   INP2:   LDA  FPFLG      
+    2783  0EC5 FE 02              CPI  2          ;FLAG=2?
+    2784  0EC7 C2 DD 0E           JNZ  INP4       
+    2785  0ECA 7E                 MOV  A, M       ;GET NEXT CHAR
+    2786  0ECB FE 2B              CPI  '+'        
+    2787  0ECD CA D5 0E           JZ   INP3       
+    2788  0ED0 FE 2D              CPI  '-'        
+    2789  0ED2 C2 DD 0E           JNZ  INP4       
+    2790  0ED5 3E 03      INP3:   MVI  A, 3       ;SET FLAG=3
+    2791  0ED7 32 39 00           STA  FPFLG      
+    2792  0EDA C3 EE 0E           JMP  INPOK      
+    2793  0EDD 7E         INP4:   MOV  A, M       ;GET NEXT CHAR
+    2794  0EDE CD 7D 02           CALL IS09       ;0-9?
+    2795  0EE1 D2 EE 0E           JNC  INPOK      
+    2796  0EE4 FE 2E              CPI  '.'        
+    2797  0EE6 CA EE 0E           JZ   INPOK      
+    2798  0EE9 3E 20              MVI  A, ' '     ;INVALID CHAR, REPLACE WITH ' '
+    2799  0EEB C3 F3 0E           JMP  INPX       
+    2800  0EEE 7E         INPOK:  MOV  A, M       ;GET NEXT CHAR
+    2801  0EEF 23                 INX  H          
+    2802  0EF0 22 37 00           SHLD FPPTR      
+    2803  0EF3 E1         INPX:   POP  H          
+    2804  0EF4 C9                 RET             
+    2805                  
+    2806                  
+    2807                  ;**********************************************************************
+    2808                  ;(HL, C) Floating absolute value, |X|
+    2809                  ;HL PTS TO THE NUMBER TO BE OPERATED ON, C REG PTS TO THE LOC WHERE THE
+    2810                  ; RESULT IS TO BE STORED.
+    2811  0EF5 C5         LABS:   PUSH B          
+    2812  0EF6 D5                 PUSH D          
+    2813  0EF7 44                 MOV  B, H       
+    2814  0EF8 16 04              MVI  D, 4       ;COPY 4  BYTES TO RESULT LOC
+    2815  0EFA 7E         LABS1:  MOV  A, M       
+    2816  0EFB 02                 STAX B          
+    2817  0EFC 2C                 INR  L          
+    2818  0EFD 0C                 INR  C          
+    2819  0EFE 15                 DCR  D          
+    2820  0EFF C2 FA 0E           JNZ  LABS1      
+    2821  0F02 0D                 DCR  C          
+    2822  0F03 0A                 LDAX B          
+    2823  0F04 E6 7F              ANI  7FH        ;CLEAR SIGN BIT
+    2824  0F06 02                 STAX B          
+    2825  0F07 D1                 POP  D          
+    2826  0F08 C1                 POP  B          
+    2827  0F09 C9                 RET             
+    2828                  
+    2829                  
+    2830                  ;**********************************************************************
+    2831                  ;(HL, B) Float compare to floats, X - Y.  Sets the C & Z flags
+    2832                  ;Original float values preserved
+    2833  0F0A D5         LCMP:   PUSH D          ;SAVE REGS
+    2834  0F0B E5                 PUSH H          
+    2835  0F0C 11 2A 00           LXI  D, FPSCR+4 ;SAVE A COPY OF X
+    2836  0F0F E5                 PUSH H          
+    2837  0F10 CD 4C 0F           CALL LCMPM      
+    2838  0F13 68                 MOV  L, B       ;SAVE A COPY OF Y
+    2839  0F14 1C                 INR  E          
+    2840  0F15 CD 4C 0F           CALL LCMPM      
+    2841  0F18 E1                 POP  H          
+    2842  0F19 0E 26              MVI  C, FPSCR   
+    2843  0F1B CD E4 02           CALL LSUB       ;X = X - Y
+    2844  0F1E 7E                 MOV  A, M       ;RESULT ZERO? (0 0 0 100Q)
+    2845  0F1F 2C                 INR  L          
+    2846  0F20 86                 ADD  M          
+    2847  0F21 2C                 INR  L          
+    2848  0F22 86                 ADD  M          
+    2849  0F23 C2 32 0F           JNZ  LCMPS      
+    2850  0F26 2C                 INR  L          
+    2851  0F27 3E 40              MVI  A, 100Q    
+    2852  0F29 BE                 CMP  M          
+    2853  0F2A C2 33 0F           JNZ  LCMPS+1    
+    2854  0F2D 1E 80              MVI  E, 200Q    
+    2855  0F2F C3 35 0F           JMP  LCMPT      
+    2856  0F32 2C         LCMPS:  INR  L          
+    2857  0F33 1E 01              MVI  E, 1       
+    2858                  ;E = 200Q (80H) IF RESULT IS ZERO, ELSE E = 1
+    2859  0F35 7E         LCMPT:  MOV  A, M       ;RESULT NEGATIVE?
+    2860  0F36 2F                 CMA             
+    2861  0F37 E6 80              ANI  200Q       
+    2862  0F39 93                 SUB  E          ;SET C & Z FLAGS
+    2863  0F3A D1                 POP  D          ;RESTORE X FROM COPY
+    2864  0F3B 21 2A 00           LXI  H, FPSCR+4 
+    2865  0F3E F5                 PUSH PSW        
+    2866  0F3F CD 4C 0F           CALL LCMPM      
+    2867  0F42 58                 MOV  E, B       ;RESTORE Y FROM COPY
+    2868  0F43 21 2E 00           LXI  H, FPSCR+8 
+    2869  0F46 CD 4C 0F           CALL LCMPM      
+    2870  0F49 F1                 POP  PSW        ;FLAGS ALL SET
+    2871  0F4A D1                 POP  D          
+    2872  0F4B C9                 RET             ;Exit LCMP
+    2873                  
+    2874                  ;MOVE A COPY OF FLOAT(4 BYTES).  HL SOURCE, DE DESTINATION PTR
+    2875  0F4C E5         LCMPM:  PUSH H          
+    2876  0F4D 7E                 MOV  A, M       
+    2877  0F4E 12                 STAX D          
+    2878  0F4F 23                 INX  H          
+    2879  0F50 13                 INX  D          
+    2880  0F51 7E                 MOV  A, M       
+    2881  0F52 12                 STAX D          
+    2882  0F53 23                 INX  H          
+    2883  0F54 13                 INX  D          
+    2884  0F55 7E                 MOV  A, M       
+    2885  0F56 12                 STAX D          
+    2886  0F57 23                 INX  H          
+    2887  0F58 13                 INX  D          
+    2888  0F59 7E                 MOV  A, M       
+    2889  0F5A 12                 STAX D          
+    2890  0F5B E1                 POP  H          
+    2891  0F5C C9                 RET             
+    2892                  
+    2893                  
+    2894                  ;**********************************************************************
+    2895                  ;(HL, BC) Floating convert Signed Integer to Foating Point
+    2896                  ;HL contains the integer, BC points to where the result should go.
+    2897  0F5D 97         LFLOAT: SUB  A          
+    2898  0F5E 32 00 00           STA  DSIGN      ;Save sign
+    2899  0F61 7C                 MOV  A, H       
+    2900  0F62 B7                 ORA  A          
+    2901  0F63 F2 6B 0F           JP   LFO1       
+    2902  0F66 3E 80              MVI  A, 80H     
+    2903  0F68 32 00 00           STA  DSIGN      
+    2904  0F6B CD 3E 00   LFO1:   CALL IABS       ;Absolute value
+    2905  0F6E EB                 XCHG            
+    2906  0F6F 60                 MOV  H, B       
+    2907  0F70 CD 5D 09           CALL ZROIT      ;Zero result
+    2908  0F73 69                 MOV  L, C       
+    2909  0F74 2C                 INR  L          
+    2910  0F75 72                 MOV  M, D       
+    2911  0F76 2C                 INR  L          
+    2912  0F77 73                 MOV  M, E       
+    2913  0F78 2D                 DCR  L          
+    2914  0F79 2D                 DCR  L          
+    2915  0F7A CD 59 04           CALL FLOAT      ;Float it
+    2916  0F7D 2C                 INR  L          
+    2917  0F7E 2C                 INR  L          
+    2918  0F7F 2C                 INR  L          
+    2919  0F80 4E                 MOV  C, M       
+    2920  0F81 3A 00 00           LDA  DSIGN      ;Adjust sign
+    2921  0F84 B1                 ORA  C          
+    2922  0F85 77                 MOV  M, A       
+    2923  0F86 C9                 RET             
+    2924                  
+    2925                  
+    2926                  ;**********************************************************************
+    2927                  ;(HL) Floating point conversion to signed integer.
+    2928                  ;HL points to the float, on return HL contains the integer result
+    2929  0F87 11 00 00   LINT:   LXI  D, 0       ;INIT RESULT = 0
+    2930  0F8A 2C                 INR  L          
+    2931  0F8B 2C                 INR  L          
+    2932  0F8C 2C                 INR  L          
+    2933  0F8D 7E                 MOV  A, M       ;A = LAST BYTE OF FLOAT
+    2934  0F8E E6 40              ANI  40H        ;EXPONENT SIGN NEGATIVE? (< 1.)
+    2935  0F90 C2 D6 0F           JNZ  LINTX      ;  YES, THEN DONE
+    2936  0F93 7E                 MOV  A, M       
+    2937  0F94 E6 3F              ANI  3FH        ;EXPONENT > 0FH? (> 32767)
+    2938  0F96 FE 10              CPI  10H        
+    2939  0F98 D2 00 00           JNC  ERRLN7     ;  YES, THEN OVERFLOW ERR
+    2940  0F9B 7E                 MOV  A, M       ;GET SIGNS+EXPONENT
+    2941  0F9C E6 80              ANI  80H        
+    2942  0F9E 32 39 00           STA  FPFLG      ;SAVE MANTISSA SIGN IN FPFLG
+    2943  0FA1 7E                 MOV  A, M       
+    2944  0FA2 E6 0F              ANI  0FH        
+    2945  0FA4 CA D6 0F           JZ   LINTX      
+    2946  0FA7 4F                 MOV  C, A       ;C = EXPONENT
+    2947  0FA8 06 08              MVI  B, 8       ;B = BIT COUNTER
+    2948  0FAA 2D                 DCR  L          
+    2949  0FAB 2D                 DCR  L          
+    2950  0FAC 2D                 DCR  L          
+    2951  0FAD 7E         LINT1:  MOV  A, M       ;A = FIRST BYTE OF FLOAT
+    2952  0FAE 17                 RAL             ;ROTATE
+    2953  0FAF 77                 MOV  M, A       
+    2954  0FB0 7B                 MOV  A, E       
+    2955  0FB1 17                 RAL             
+    2956  0FB2 5F                 MOV  E, A       
+    2957  0FB3 05                 DCR  B          
+    2958  0FB4 CA BE 0F           JZ   LINT2      
+    2959  0FB7 0D                 DCR  C          
+    2960  0FB8 C2 AD 0F           JNZ  LINT1      
+    2961  0FBB C3 D6 0F           JMP  LINTX      
+    2962  0FBE 2C         LINT2:  INR  L          
+    2963  0FBF 0D                 DCR  C          
+    2964  0FC0 CA D6 0F           JZ   LINTX      
+    2965  0FC3 06 08              MVI  B, 8       
+    2966  0FC5 7E         LINT3:  MOV  A, M       ;A = SECOND BYTE OF FLOAT
+    2967  0FC6 17                 RAL             
+    2968  0FC7 77                 MOV  M, A       
+    2969  0FC8 7B                 MOV  A, E       
+    2970  0FC9 17                 RAL             
+    2971  0FCA 5F                 MOV  E, A       
+    2972  0FCB 7A                 MOV  A, D       
+    2973  0FCC 17                 RAL             
+    2974  0FCD 57                 MOV  D, A       
+    2975  0FCE 05                 DCR  B          
+    2976  0FCF CA D6 0F           JZ   LINTX      
+    2977  0FD2 0D                 DCR  C          
+    2978  0FD3 C2 C5 0F           JNZ  LINT3      
+    2979  0FD6 EB         LINTX:  XCHG            ;HL = RESULT
+    2980  0FD7 3A 39 00           LDA  FPFLG      ;GET MANTISSA SIGN
+    2981  0FDA B7                 ORA  A          
+    2982  0FDB C8                 RZ              
+    2983  0FDC CD C7 01           CALL INEG       
+    2984  0FDF C9                 RET             
+    2985                  
+    2986                  
+    2987                  ;**********************************************************************
+    2988                  ;(HL, C) Float negation, -(X)
+    2989                  ;HL points to the float, C points to location of result
+    2990  0FE0 C5         LNEG:   PUSH B          
+    2991  0FE1 D5                 PUSH D          
+    2992  0FE2 44                 MOV  B, H       
+    2993  0FE3 16 04              MVI  D, 4       ;COPY 4  BYTES TO RESULT LOC
+    2994  0FE5 7E         LNEG1:  MOV  A, M       
+    2995  0FE6 02                 STAX B          
+    2996  0FE7 2C                 INR  L          
+    2997  0FE8 0C                 INR  C          
+    2998  0FE9 15                 DCR  D          
+    2999  0FEA C2 E5 0F           JNZ  LNEG1      
+    3000  0FED 0D                 DCR  C          
+    3001  0FEE 0A                 LDAX B          
+    3002  0FEF EE 80              XRI  80H        ;COMPLEMENT SIGN BIT
+    3003  0FF1 02                 STAX B          
+    3004  0FF2 D1                 POP  D          
+    3005  0FF3 C1                 POP  B          
+    3006  0FF4 C9                 RET             
+    3007                  
+    3008                  
+    3009                  ;**********************************************************************
+    3010                  ;(A) Character output routine. Clear high bit then display it.
+    3011  0FF5 E6 7F      OUTR:   ANI  7FH        ;Zero high bit
+    3012  0FF7 CD 00 00           CALL DISPA      ;Display the character
+    3013  0FFA C9                 RET             
+    3014                  
+
+----------------------------------------------------------------------------
+Symbols:
+  ABCH 03B8      ACPR 0573      ADD1 0817      ADD2 0363      ADDZ 035A    
+  AGN4 064A      ALDN 0695      AORS 0565      APLS 0883      ARHL 0182    
+ASCIN0 0082    ASCIN1 008E    ASCIN2 0094    ASCIN4 00BF    ASCIXT 00C0    
+  BBCH 03C1      BCHK 0466      BCTL 0611      BMIN 03A6      CCHK 05C8    
+  CCMP 04DF     CFCHE 04D0      COM1 039A      COM2 03AC      COPT 082C    
+  COPY 083A      CRIN 02D1     CSIGN 05ED      CSTR 05F5      CTWO 081B    
+  CVRT 06D2      DADD 048A      DANG 0D48     DANG1 0D9B     DANG2 0DBC    
+ DANG3 0DED     DANG4 0E3B     DANGS 0E5E      DCLR 04A1      DCMP 0578    
+  DCOS 0967     DECPT 08B4      DECR 0558      DEXP 09A0     DEXPA 0A00    
+DEXPA1 0A12     DEXPB 0A6F    DEXPB1 0AA2    DEXPB2 0AC9    DEXPC1 098C    
+DEXPC2 0990    DEXPC3 0994    DEXPC4 0998    DEXPC5 099C     DEXPP 09D4    
+  DFXL 0452      DIGO 0775     DISPA 0000     DIVIT 07FE      DLOG 0B07    
+ DLOGA 0B43    DLOGA1 0B72     DLOGB 0C03    DLOGB1 0C07    DLOGB2 0C41    
+DLOGC0 0AF3    DLOGC2 0AF7    DLOGC3 0AFB    DLOGC4 0AFF    DLOGC5 0B03    
+  DLST 046D      DPOW 0C5A     DPOW2 0C7D      DRST 047C     DSIGN 0000    
+  DSIN 0CC6     DSINM 0E67    DSINML 0E6B     DSINS 0D37    DSINXX 0D1D    
+ DSQRT 061E      DSUB 04AA      DTAN 0E75     DTST2 0296      ENT1 0594    
+  ENT2 058E       EP1 093D      EPOS 0646      EQ02 0320      EQUL 0318    
+ERRLN3 0000    ERRLN7 0000      ERSQ 069D      EXPI 003B      EXPS 003C    
+ FINIT 0812     FINUP 07F2     FLOAT 0459    FLTSGN 0943     FPCNT 003A    
+ FPFLG 0039     FPOP1 000A     FPOP2 000E     FPOP3 0012     FPOP4 0016    
+ FPOP5 001A     FPOP6 001E     FPOP7 0022     FPPTR 0037     FPRES 0006    
+ FPSCR 0026      FXL1 0436      FXL2 0437     GCHAR 04C5      GCHR 07D8    
+  GETA 07D9     GETEX 07F9      GETN 0957      GNUM 08FA      GOON 02BF    
+  GOTV 0720      IABS 003E      IADD 0045     IADDM 0062     IADDN 0053    
+ IADDU 0066      IASC 006D      ICMP 00C2      IDIV 00C8     IDIV1 00EB    
+IDIV10 0117     IDIV2 0105     IDIV3 012E     IDIV4 013A     IDIVB 00D2    
+ IDIVC 00DA     IDIVD 0172     IDIVE 0173     IDIVF 0175     IDIVL 0168    
+ IDIVX 0180      IMUL 018A     IMUL1 0196     IMUL2 019E     IMUL3 01A5    
+ IMUL4 01AE     IMUL5 01B7     IMULX 01C4      INCR 053A     INCR2 054A    
+ INCR3 0547     INDF1 0508     INDFC 052C      INEG 01C7     INEXP 08C9    
+   INP 0EA2      INP1 0EB4      INP2 0EC2      INP3 0ED5      INP4 0EDD    
+ INPOK 0EEE     INPOP 075D     INPUT 084F      INPX 0EF3      INT1 08A5    
+  INT5 088D      INTR 0403    IPRINT 01D1    IPSTR1 01DB    IPSTR2 01EB    
+IPSTR3 0207      IRND 0217     IRNDL 0226     IRNDX 024A      IS09 027D    
+ ISIGN 0001      ISUB 024D    ISUBNC 0263     ISUBU 026C     ISUBX 026A    
+  KPGO 03FA      L000 03CA      L001 03CC      L002 03A3      L003 03CF    
+  L128 03D2      L129 03D5      L131 03D8      LABS 0EF5     LABS1 0EFA    
+  LADD 02E0      LADS 02E6      LASD 0386      LCMP 0F0A     LCMPM 0F4C    
+ LCMPS 0F32     LCMPT 0F35      LDCP 05BD      LDIV 0284    LFLOAT 0F5D    
+  LFO1 0F6B      LINT 0F87     LINT1 0FAD     LINT2 0FBE     LINT3 0FC5    
+ LINTX 0FD6      LLTB 0303      LMCM 03DB      LMCP 05C4      LMUL 03E3    
+  LNEG 0FE0     LNEG1 0FE5      LOOP 081D      LSFT 07B1     LSIGN 003D    
+  LSUB 02E4     LXCHG 06A4    LXCHG1 06A8      LXFR 05A8      MADD 0428    
+  MANT 0373     MAXCH 003F    MAXINT 06CE      MDGN 073B     MDSKP 0749    
+ MINCH 00C0      MORD 07DE      MSFH 05FD       MSG 0000     MULTT 0789    
+  NCHK 0308     NNZRO 06EA      NORM 0431     NORM1 0432     NOSPC 0275    
+  NOT0 032E      NZRO 0707     OFLW1 04FA     OFLWC 05DF       OK1 0744    
+   ONE 06C6      OUTR 0FF5      OVER 059B      PLSV 07D4      POPD 075A    
+RANDOM 0002      REP3 02AB      REP5 05AA      REP6 043D     SAVEN 0947    
+ SCALE 0871     SCCFG 0556     SCHAR 044F      SH10 0310      SIGN 07CB    
+ SINC1 0CA6     SINC2 0CAA     SINC3 0CAE     SINC4 0CB2     SINC5 0CB6    
+ SINC6 0CBA     SINC7 0CBE     SINC8 0CC2     STORC 05D7      STR1 1F40    
+  SUBZ 033D       TEN 06C2      TEN2 06BE      TEN3 06BA      TEN4 06B6    
+  TEN5 06B2     TLOOP 07B4      TLP2 07B5      TRY1 072E      TRYP 0910    
+ TRYTN 089D      TST1 0733      TST8 0713     TSTEX 0864      TSTN 0915    
+  TSTR 056B      TWOD 0804     UFLW1 04EC     UFLWC 05E6     USEIT 08EB    
+ WCHAR 0523      WIND 0503     WMANT 051C      WOVR 04F5      WUND 04E7    
+  WZER 0511     WZERC 0533      ZCHK 045E      ZERO 06CA     ZMCHK 045E    
+ ZROIT 095D    
+----------------------------------------------------------------------------
+Error codes: *O*=undefined opcode, *V*=illegal value, *R*=illegal register,
+             *U*=undefined symbol, *D*=duplicate symbol
+Total Errors = 0
