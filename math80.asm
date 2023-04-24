@@ -51,6 +51,7 @@
 ;  OUTR   (A) Output an ASCII character
 ;******************************************************************************
 
+
 ;External routines and variables (not part of this package)
 DISPA:  EQU 0           ;(A) Routine to display char
 MSG:    EQU 0           ;(@HL) Routine to display string
@@ -89,11 +90,12 @@ LSIGN:  DS 1            ;byte sign
 ;-----------------------------------------------------------------------------
 
 ;-----------------------------------------------------------------------------
-;(HL) 16 bit signed integer absolute value.
+;(HL) 16 bit signed integer absolute value. Returns CY=1 if passed a negative.
 IABS:   MOV A, H        ;Check the sign
         ORA A
         RP              ;Done if positive, CY=0
         CALL INEG       ;Form 2's complement
+        STC             ;CY=1
         RET
 
 ;------------------------------------------------------------------------------
